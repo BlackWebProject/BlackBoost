@@ -20,7 +20,8 @@ jobs:
         run: gradle :app:assembleDebug --no-daemon --console=plain > build.log 2>&1
       - name: Show errors
         if: failure()
-        run: grep -E "^e: |error:|What went wrong|Execution failed" -A3 build.log | head -80 || tail -60 build.log
+        run: |
+          grep -E "^e: |error:|What went wrong|Execution failed" -A3 build.log | head -80 || tail -60 build.log
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
