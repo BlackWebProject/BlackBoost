@@ -405,7 +405,7 @@ fun FpsS(vm: Vm, act: Activity) {
                 }
             }
             Item(Ic.bolt, "Game Mode+", t("Не беспокоить на время игры", "Do Not Disturb while gaming"),
-                trail = { Tog(vm.gameMode) { on -> vm.changeGameMode(on); if (on && !vm.dndOk) Sys.dnd(ctx) } })
+                trail = { Tog(vm.gameMode) { on -> vm.setGameMode(on); if (on && !vm.dndOk) Sys.dnd(ctx) } })
         } else Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
                 .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(16.dp)).clickable { vm.paywall = true }.padding(14.dp),
@@ -433,7 +433,7 @@ fun FpsS(vm: Vm, act: Activity) {
 @Composable
 fun SettingsS(vm: Vm) {
     val ctx = LocalContext.current
-    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.changeNotif(ok) }
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.setNotif(ok) }
     val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Page(vm, Screen.Settings, t("Настройки", "Settings")) {
         Row(
@@ -452,13 +452,13 @@ fun SettingsS(vm: Vm) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Icon(Ic.globe, null, Modifier.size(24.dp), tint = Em); Txt(t("Язык", "Language"), 15, w = bold)
             }
-            Tabs(listOf("Русский", "English"), if (vm.lang == "en") 1 else 0) { vm.changeLang(if (it == 1) "en" else "ru") }
+            Tabs(listOf("Русский", "English"), if (vm.lang == "en") 1 else 0) { vm.setLang(if (it == 1) "en" else "ru") }
         }
         Item(Ic.bell, t("Уведомления", "Notifications"), t("Включить оповещения", "Turn on alerts"), trail = {
             Tog(vm.notif) { on ->
                 if (on && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                     perm.launch(Manifest.permission.POST_NOTIFICATIONS)
-                else vm.changeNotif(on)
+                else vm.setNotif(on)
             }
         })
     }

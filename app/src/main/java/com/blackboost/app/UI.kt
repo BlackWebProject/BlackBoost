@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalTextApi::class)
-
 package com.blackboost.app
 
 import androidx.compose.animation.core.*
@@ -17,6 +15,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
 import androidx.compose.ui.graphics.vector.*
 import androidx.compose.ui.text.*
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
@@ -42,8 +41,8 @@ val LocalLang = compositionLocalOf { "ru" }
 
 fun Long.sz(): String = if (this >= 1_000_000_000L) String.format(Locale.US, "%.1f GB", this / 1e9) else String.format(Locale.US, "%d MB", this / 1_000_000)
 
-fun icon(d: String): ImageVector = ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f).addPath(
-    pathData = addPathNodes(d), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+fun icon(d: String): ImageVector = ImageVector.Builder(24.dp, 24.dp, 24f, 24f).addPath(
+    pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(d).toNodes(), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
     strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
 ).build()
 

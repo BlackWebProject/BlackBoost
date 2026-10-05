@@ -61,9 +61,9 @@ class Vm(app: Application) : AndroidViewModel(app) {
     init { Notify.schedule(app, notif); refresh() }
 
     fun grantPremium() { premium = true; prefs.premium = true }
-    fun changeLang(l: String) { lang = l; prefs.lang = l }
-    fun changeNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on) }
-    fun changeGameMode(on: Boolean) { gameMode = on; prefs.gameMode = on }
+    fun setLang(l: String) { lang = l; prefs.lang = l }
+    fun setNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on) }
+    fun setGameMode(on: Boolean) { gameMode = on; prefs.gameMode = on }
 
     fun refresh() {
         Sys.mem(c).let { ramFree = it.first; ramTotal = it.second }

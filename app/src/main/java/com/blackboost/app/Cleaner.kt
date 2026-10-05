@@ -26,7 +26,7 @@ object Cleaner {
 
     /** Сканирует память. Если нет доступа ко всем файлам, ищет только кэш самого приложения. */
     suspend fun scan(c: Context, all: Boolean): List<Junk> = withContext(Dispatchers.IO) {
-        val tmp = ArrayList<File>(); val apk = ArrayList<File>(); val sys = ArrayList<File>(); val big = ArrayList<File>()
+        val tmp = ArrayList<File>(); val sys = ArrayList<File>(); val big = ArrayList<File>()
         if (all) {
             val root = Environment.getExternalStorageDirectory()
             root.walkTopDown().onEnter { !(it.parentFile == root && it.name == "Android") }.forEach { f ->
@@ -37,7 +37,8 @@ object Cleaner {
                     when {
                         n.startsWith(".trashed-") || par == ".thumbnails" || par == "LOST.DIR" -> sys += f
                         ext in tmpExt || n.startsWith("~") -> tmp += f
-                        ext == "apk" -> apk += f
+                        // APK installers are never auto-classified as junk or deleted.
+                        ext == "apk" -> Unit
                         f.length() >= 100 * 1024 && !n.startsWith(".") -> big += f
                     }
                 }
@@ -51,18 +52,18 @@ object Cleaner {
         listOf(
             j("cache", "Кэш приложений", "App cache", ownCache(c)),
             j("tmp", "Временные файлы", "Temp files", tmp),
-            j("left", "Остаточные файлы", "Leftover files", apk),
+            j("left", "Остаточные файлы", "Leftover files", emptyList()),
             j("dup", "Дубликаты файлов", "Duplicate files", dup),
             j("sys", "Системный мусор", "System junk", sys)
         )
     }
 
     suspend fun clean(items: List<Junk>, progress: (Float) -> Unit): Long = withContext(Dispatchers.IO) {
-        val all = items.flatMap { it.files }
+        val all = items.flatMap { it.files }.distinctBy { it.canonicalPath }
         var freed = 0L
         all.forEachIndexed { i, f ->
             val l = f.length()
-            if (f.delete()) freed += l
+            if (f.isFile && !f.name.endsWith(".apk", ignoreCase = true) && f.delete()) freed += l
             if (i % 20 == 0) progress((i + 1f) / all.size)
         }
         progress(1f)

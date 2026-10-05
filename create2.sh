@@ -1,3 +1,116 @@
+#!/usr/bin/env bash
+# Black Boost: создает Android-приложение менеджера игровых профилей и сборку APK через GitHub Actions.
+# Запуск из корня репозитория Codespaces: bash create2.sh
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Откройте корень GitHub-репозитория в Codespaces и поместите туда create2.sh." >&2
+  exit 1
+fi
+
+mkdir -p app/src/main/java/com/blackboost/app app/src/main/res/values .github/workflows
+
+cat > settings.gradle.kts <<'EOF_SETTINGS'
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+rootProject.name = "BlackBoost"
+include(":app")
+EOF_SETTINGS
+
+cat > build.gradle.kts <<'EOF_ROOT_BUILD'
+plugins {
+    id("com.android.application") version "8.5.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+}
+EOF_ROOT_BUILD
+
+cat > gradle.properties <<'EOF_GRADLE_PROPERTIES'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+kotlin.code.style=official
+EOF_GRADLE_PROPERTIES
+
+cat > app/build.gradle.kts <<'EOF_APP_BUILD'
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.blackboost.app"
+    compileSdk = 34
+    defaultConfig {
+        applicationId = "com.blackboost.app"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 2
+        versionName = "2.0.0"
+    }
+    buildTypes {
+        debug { applicationIdSuffix = ".debug" }
+        release { isMinifyEnabled = false }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+}
+
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+}
+EOF_APP_BUILD
+
+cat > app/src/main/AndroidManifest.xml <<'EOF_MANIFEST'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+    <application
+        android:allowBackup="false"
+        android:label="Black Boost"
+        android:theme="@style/Theme.BlackBoost">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF_MANIFEST
+
+cat > app/src/main/res/values/styles.xml <<'EOF_STYLES'
+<resources>
+    <style name="Theme.BlackBoost" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#FF6A24</item>
+        <item name="android:statusBarColor">#090909</item>
+        <item name="android:navigationBarColor">#090909</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
+EOF_STYLES
+
+cat > app/src/main/java/com/blackboost/app/MainActivity.kt <<'EOF_ACTIVITY'
 package com.blackboost.app
 
 import android.app.ActivityManager
@@ -312,3 +425,49 @@ private fun powerDescription(profile: PowerProfile): String = when (profile) {
     PowerProfile.BALANCED -> "Обычная работа менеджера профилей"
     PowerProfile.PERFORMANCE -> "Не выполнять энергосберегающие действия в игровой сессии"
 }
+EOF_ACTIVITY
+
+cat > .github/workflows/build.yml <<'EOF_WORKFLOW'
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: black-boost-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+EOF_WORKFLOW
+
+cat > .gitignore <<'EOF_GITIGNORE'
+.gradle/
+build/
+app/build/
+.idea/
+local.properties
+*.iml
+EOF_GITIGNORE
+
+echo "Проект Black Boost 2.0 создан. Скрипт ничего не коммитит и не отправляет в GitHub."
+echo "Проверьте изменения, затем: git add . && git commit -m 'Build Black Boost game profiles' && git push"
+echo "APK появится в GitHub → Actions → Build APK → Artifacts → black-boost-debug-apk."
