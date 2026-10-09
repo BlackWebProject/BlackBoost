@@ -4,7 +4,10 @@ package com.blackboost.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.os.Build
+import android.os.PowerManager
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,81 +20,48 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 
 @Composable
 fun App(vm: Vm, act: Activity) {
-    BackHandler(enabled = vm.screen != Screen.Home && vm.screen != Screen.Splash && vm.screen != Screen.Onboard) { vm.back() }
+    BackHandler(enabled = vm.screen != Screen.Home && vm.screen != Screen.Splash) { vm.back() }
     Box(Modifier.fillMaxSize().background(Bg)) {
         when (vm.screen) {
             Screen.Splash -> SplashS(vm)
-            Screen.Onboard -> OnboardS(vm)
             Screen.Home -> HomeS(vm)
-            Screen.FpsBoost -> FpsBoostS(vm)
-            Screen.Flow -> FlowS(vm, act)
-            Screen.GameMode -> GameModeS(vm)
             Screen.Clean -> CleanS(vm)
-            Screen.Cache -> CacheS(vm)
-            Screen.Energy -> EnergyS(vm)
-            Screen.Picker -> PickerS(vm)
-            Screen.Profile -> ProfileS(vm)
+            Screen.Battery -> BatteryS(vm)
+            Screen.Apps -> AppsS(vm)
+            Screen.Storage -> StorageS(vm)
+            Screen.Fps -> FpsS(vm, act)
             Screen.Settings -> SettingsS(vm)
         }
         vm.toast?.let {
-            Box(Modifier.align(Alignment.BottomCenter).padding(24.dp, 0.dp, 24.dp, 60.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF1A1512)).padding(16.dp, 12.dp)) {
-                Txt(it, 13, w = FontWeight.SemiBold, align = TextAlign.Center)
+            Box(Modifier.align(Alignment.BottomCenter).padding(24.dp, 0.dp, 24.dp, 100.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF1A1512)).padding(16.dp, 12.dp)) {
+                Txt(it, 13, w = androidx.compose.ui.text.font.FontWeight.SemiBold, align = TextAlign.Center)
             }
             LaunchedEffect(it) { delay(2800); vm.toast = null }
         }
         if (vm.paywall) Paywall(vm, act)
-        vm.explain?.let { e ->
-            Dialog(onDismissRequest = { vm.explain = null }) {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Bg).border(1.dp, Ln, RoundedCornerShape(24.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Txt(e.title, 18, w = FontWeight.Bold)
-                    Txt(e.text, 14, Mu)
-                    HotBtn(t("Продолжить", "Continue")) { vm.explain = null; e.action() }
-                    Txt(t("Отмена", "Cancel"), 14, Mu, modifier = Modifier.fillMaxWidth().clickable { vm.explain = null }.padding(8.dp), align = TextAlign.Center)
-                }
-            }
-        }
-        vm.summary?.let { s ->
-            Dialog(onDismissRequest = { vm.summary = null }) {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Bg).border(1.dp, Ln, RoundedCornerShape(24.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Txt(t("Игровая сессия завершена", "Game session finished"), 18, w = FontWeight.Bold)
-                    Txt(s.label, 14, Mu)
-                    Item(Ic.clock, t("Длительность", "Duration"), "${s.secs / 60} ${t("мин", "min")} ${s.secs % 60} ${t("с", "s")}")
-                    Item(Ic.bolt, t("Профиль", "Profile"), modeName(s.mode))
-                    Item(Ic.chart, t("Доступная память", "Available memory"), "${s.ramStart.sz()} → ${s.ramEnd.sz()}")
-                    Item(Ic.battery, t("Температура батареи", "Battery temperature"), "${s.tempStart}°C → ${s.tempEnd}°C")
-                    Txt(t("Показаны только измеренные значения. FPS приложение не измеряет.", "Only measured values are shown. FPS is not measured by the app."), 11, Mu)
-                    HotBtn("OK") { vm.summary = null }
-                }
-            }
-        }
     }
 }
 
 @Composable
-fun modeName(m: String): String = when (m) {
-    "max" -> t("Максимальная производительность", "Maximum performance")
-    "perf" -> t("Производительность", "Performance")
-    "bal" -> t("Баланс", "Balanced")
-    else -> t("Экономия", "Battery saver")
-}
-
-@Composable
-fun Page(vm: Vm, title: String?, back: Boolean = true, bottom: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+fun Page(vm: Vm, cur: Screen?, title: String?, back: Boolean = false, bottom: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
         if (title != null) TopBar(title, back) { vm.back() }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp, 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
-        if (bottom != null) Box(Modifier.padding(20.dp, 4.dp, 20.dp, 16.dp)) { bottom() }
+        if (bottom != null) Box(Modifier.padding(20.dp, 4.dp, 20.dp, 12.dp)) { bottom() }
+        if (cur != null) NavBar(cur) { vm.go(it, true) }
     }
 }
 
@@ -103,7 +73,7 @@ fun SplashS(vm: Vm) {
     LaunchedEffect(Unit) {
         launch { sc.animateTo(1f, tween(700)) }
         p.animateTo(1f, tween(2000, easing = LinearEasing))
-        vm.go(if (vm.onboarded) Screen.Home else Screen.Onboard, true)
+        vm.go(Screen.Home, true)
     }
     Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.weight(1f))
@@ -112,8 +82,8 @@ fun SplashS(vm: Vm) {
             Image(painterResource(R.drawable.ic_logo), null, Modifier.height(130.dp).aspectRatio(636f / 603f).scale(sc.value))
         }
         Spacer(Modifier.height(20.dp))
-        Txt("Black", 50, disp = true, w = FontWeight.Black)
-        Txt("Boost", 50, disp = true, w = FontWeight.Black, brush = Hot)
+        Txt("Black", 50, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
+        Txt("Boost", 50, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black, brush = Hot)
         Spacer(Modifier.weight(1f))
         Box(Modifier.width(200.dp)) { Bar(p.value) }
         Spacer(Modifier.height(12.dp))
@@ -122,247 +92,73 @@ fun SplashS(vm: Vm) {
 }
 
 @Composable
-fun OnboardS(vm: Vm) {
-    var step by remember { mutableIntStateOf(0) }
-    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.changeNotif(ok); step = 3 }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.weight(1f))
-        Image(painterResource(R.drawable.ic_logo), null, Modifier.height(90.dp).aspectRatio(636f / 603f))
-        Spacer(Modifier.height(24.dp))
-        when (step) {
-            0 -> {
-                Txt(t("Настроим FPS Boost", "Let's set up FPS Boost"), 26, disp = true, w = FontWeight.Black, align = TextAlign.Center)
-                Spacer(Modifier.height(12.dp))
-                Txt(t("Приложению нужны только разрешения, необходимые для выбранных функций. Вы сможете изменить их позже.",
-                    "The app only asks for permissions needed by the features you choose. You can change them later."), 15, Mu, align = TextAlign.Center)
-            }
-            1 -> {
-                Txt(t("Без лишнего", "No extras"), 26, disp = true, w = FontWeight.Black, align = TextAlign.Center)
-                Spacer(Modifier.height(12.dp))
-                Txt(t("FPS Boost не изменяет системные файлы и не требует лишних разрешений: ни камеры, ни геолокации, ни контактов, ни полного доступа к хранилищу.",
-                    "FPS Boost does not modify system files and needs no extra permissions: no camera, location, contacts or full storage access."), 15, Mu, align = TextAlign.Center)
-                Spacer(Modifier.height(10.dp))
-                Txt(t("И никаких обещаний «+60 FPS»: только то, что Android реально позволяет.", "And no «+60 FPS» promises: only what Android really allows."), 13, Am, align = TextAlign.Center)
-            }
-            2 -> {
-                Txt(t("Уведомления", "Notifications"), 26, disp = true, w = FontWeight.Black, align = TextAlign.Center)
-                Spacer(Modifier.height(12.dp))
-                Txt(t("По желанию: предупреждения о нехватке места и перегреве батареи. Можно пропустить.", "Optional: low storage and battery overheating alerts. You can skip this."), 15, Mu, align = TextAlign.Center)
-            }
-            else -> {
-                Txt(t("Добавьте первую игру", "Add your first game"), 26, disp = true, w = FontWeight.Black, align = TextAlign.Center)
-                Spacer(Modifier.height(12.dp))
-                Txt(t("Для каждой игры создаётся свой профиль: режим, очистка перед запуском, «Не беспокоить».", "Each game gets its own profile: mode, clean before launch, Do Not Disturb."), 15, Mu, align = TextAlign.Center)
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        when (step) {
-            0, 1 -> HotBtn(t("Продолжить", "Continue")) { step++ }
-            2 -> {
-                HotBtn(t("Разрешить", "Allow")) { if (Build.VERSION.SDK_INT >= 33) perm.launch(Manifest.permission.POST_NOTIFICATIONS) else { vm.changeNotif(true); step = 3 } }
-                Txt(t("Пропустить", "Skip"), 14, Mu, modifier = Modifier.clickable { step = 3 }.padding(14.dp))
-            }
-            else -> {
-                HotBtn(t("Выбрать игру", "Choose a game")) { vm.finishOnboard(); vm.go(Screen.Picker, true) }
-                Txt(t("Пропустить", "Skip"), 14, Mu, modifier = Modifier.clickable { vm.finishOnboard(); vm.go(Screen.Home, true) }.padding(14.dp))
-            }
-        }
+fun RowScope.Tile(i: ImageVector, l: String, v: String, on: () -> Unit) =
+    Column(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).card().clickable(onClick = on).padding(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Icon(i, null, Modifier.size(26.dp), tint = Em)
+        Column { Txt(l, 14, w = androidx.compose.ui.text.font.FontWeight.SemiBold); Txt(v, 17, Am, androidx.compose.ui.text.font.FontWeight.Bold, true) }
     }
-}
 
 @Composable
 fun HomeS(vm: Vm) {
-    LaunchedEffect(Unit) { vm.loadApps(); vm.refreshOwn(); while (true) { vm.refresh(); delay(4000) } }
-    val junkB = vm.junk?.sumOf { it.bytes } ?: 0L
-    val ready = vm.games.isNotEmpty()
-    Page(vm, null, false) {
+    LaunchedEffect(Unit) { while (true) { vm.refresh(); delay(3000) } }
+    LaunchedEffect(vm.usageOk) { vm.loadApps() }
+    LaunchedEffect(vm.filesOk) { if (vm.junk == null && vm.phase == "idle") vm.scan() }
+    val ctx = LocalContext.current
+    val ju = vm.junk?.sumOf { it.bytes }
+    Page(vm, Screen.Home, null) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Image(painterResource(R.drawable.ic_logo), null, Modifier.height(26.dp).aspectRatio(636f / 603f))
-            Txt("Black Boost", 19, disp = true, w = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Sf).border(1.dp, Ln, CircleShape).clickable { vm.go(Screen.Settings) }, Alignment.Center) {
-                Icon(Ic.gear, null, Modifier.size(20.dp), tint = Tx)
-            }
+            Txt("Black Boost", 19, disp = true, w = androidx.compose.ui.text.font.FontWeight.Bold)
         }
-        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(contentAlignment = Alignment.Center) {
-                Box(Modifier.size(200.dp).background(Brush.radialGradient(listOf(Em.copy(alpha = 0.3f), Color.Transparent))))
-                Image(painterResource(R.drawable.ic_logo), null, Modifier.height(90.dp).aspectRatio(636f / 603f))
-            }
-            Txt(if (ready) t("Готово к игре", "Ready to play") else t("Добавьте первую игру", "Add your first game"), 24, disp = true, w = FontWeight.Black)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Column(Modifier.weight(1f).card().padding(16.dp)) { Txt("RAM", 12, Mu); Txt(vm.ramFree.sz(), 20, Am, FontWeight.Bold, true); Txt(t("свободно", "free"), 11, Mu) }
-            Column(Modifier.weight(1f).card().padding(16.dp)) { Txt("Storage", 12, Mu); Txt(vm.stFree.sz(), 20, Am, FontWeight.Bold, true); Txt(t("свободно", "free"), 11, Mu) }
-        }
-        Feat(Ic.bolt, "FPS BOOST", if (ready) Ok else Warn, if (ready) t("Готов", "Ready") else t("Добавьте игру", "Add a game")) { vm.go(Screen.FpsBoost) }
-        Feat(Ic.play, "GAME MODE", if (vm.premium && vm.defProf.dnd && !vm.dndOk) Warn else Ok,
-            if (vm.premium && vm.defProf.dnd && !vm.dndOk) t("Требуется разрешение", "Permission needed") else t("Готов", "Ready")) { vm.go(Screen.GameMode) }
-        Feat(Ic.trash, t("ОЧИСТКА", "CLEANER"), if (junkB > 0) Ok else Off,
-            if (junkB > 0) t("Можно очистить: ", "Can clean: ") + junkB.sz() else t("Не используется", "Not used")) { vm.go(Screen.Clean) }
-        Feat(Ic.battery, t("ЭНЕРГОСБЕРЕЖЕНИЕ", "POWER SAVING"), if (vm.saver) Ok else Off,
-            if (vm.saver) t("Активно", "Active") else t("Не используется", "Not used")) { vm.go(Screen.Energy) }
-        Feat(Ic.db, t("ОЧИСТКА КЭША", "CACHE CLEANER"), if (vm.ownBytes > 0) Ok else Off,
-            if (vm.ownBytes > 0) t("Можно очистить: ", "Can clean: ") + vm.ownBytes.sz() else t("Не используется", "Not used")) { vm.go(Screen.Cache) }
-        Txt(t("Мои игры", "My games"), 16, w = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-        vm.games.mapNotNull { vm.appOf(it) }.forEach { a ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable { vm.target = a.pkg; vm.go(Screen.Flow) }.padding(12.dp, 10.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                a.icon?.let { Image(it, null, Modifier.size(40.dp)) }
-                Column(Modifier.weight(1f)) { Txt(a.label, 15, w = FontWeight.SemiBold); Txt(modeName(vm.prof(a.pkg).mode), 12, Mu) }
-                Box(Modifier.size(36.dp).clickable { vm.target = a.pkg; vm.go(Screen.Profile) }, Alignment.Center) { Icon(Ic.gear, null, Modifier.size(20.dp), tint = Mu) }
-            }
-        }
-        Item(Ic.play, t("Добавить игру", "Add a game"), null, trail = { Txt("+", 22, Am) }) { vm.go(Screen.Picker) }
-    }
-}
-
-@Composable
-fun FpsBoostS(vm: Vm) {
-    LaunchedEffect(Unit) { vm.loadApps() }
-    Page(vm, "FPS Boost") {
-        Txt(t("Выберите игру", "Choose a game"), 16, w = FontWeight.Bold)
-        Txt(t("Перед запуском приложение применит профиль игры и очистит собственный кэш. Системные настройки при необходимости подтверждаете вы.",
-            "Before launch the app applies the game profile and clears its own cache. You confirm system settings when needed."), 12, Mu)
-        vm.games.mapNotNull { vm.appOf(it) }.forEach { a ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable { vm.target = a.pkg; vm.go(Screen.Flow) }.padding(12.dp, 10.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                a.icon?.let { Image(it, null, Modifier.size(40.dp)) }
-                Column(Modifier.weight(1f)) { Txt(a.label, 15, w = FontWeight.SemiBold); Txt(modeName(vm.prof(a.pkg).mode), 12, Mu) }
-                Txt("›", 22, Mu)
-            }
-        }
-        if (vm.games.isEmpty()) Txt(t("Игр пока нет.", "No games yet."), 13, Mu)
-        Item(Ic.play, t("Добавить игру", "Add a game"), null, trail = { Txt("+", 22, Am) }) { vm.go(Screen.Picker) }
-    }
-}
-
-@Composable
-fun FlowS(vm: Vm, act: Activity) {
-    val pkg = vm.target
-    val a = vm.appOf(pkg)
-    LaunchedEffect(pkg) { vm.runFlow() }
-    val p = pkg?.let { vm.prof(it) } ?: vm.defProf
-    val steps = listOf(t("Игра найдена", "Game found"), t("Профиль загружен", "Profile loaded"), t("Доступные оптимизации проверены", "Available optimizations checked"), t("Временные файлы обработаны", "Temporary files processed"))
-    Page(vm, t("Оптимизация", "Optimization"), bottom = {
-        HotBtn(if (vm.flowReady) t("ЗАПУСТИТЬ ИГРУ", "LAUNCH GAME") else t("Проверка устройства...", "Checking device..."), vm.flowReady) { vm.launchGame(act) }
-    }) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            a?.icon?.let { Image(it, null, Modifier.size(52.dp)) }
-            Column { Txt(t("Оптимизация для ", "Optimization for ") + (a?.label ?: ""), 17, w = FontWeight.Bold); Txt(modeName(p.mode), 12, Mu) }
-        }
-        steps.forEachIndexed { i, s -> Item(null, s, null, trail = { MiniCheck(vm.flowStep > i) }) }
-        vm.flowError?.let { Txt(it, 13, Bad) }
-        if (vm.flowReady) Txt(if (vm.flowFreed > 0) t("Очищено собственного кэша: ", "Own cache cleared: ") + vm.flowFreed.sz() else t("Собственный кэш пуст — очищать нечего.", "Own cache is empty — nothing to clean."), 12, Mu)
-        if (vm.saver && (p.mode == "perf" || p.mode == "max"))
-            Item(Ic.battery, t("Энергосбережение Android включено", "Android power saving is on"), t("Оно может снижать производительность. Отключите вручную.", "It may reduce performance. Turn it off manually."),
-                trail = { Txt(t("Открыть", "Open"), 13, Am, FontWeight.Bold) }) { Sys.saver(act) }
-        if (premiumNeeds(vm, p)) Item(Ic.bell, t("Нужен доступ «Не беспокоить»", "Do Not Disturb access needed"), t("Без него уведомления в игре не скрываются", "Without it notifications are not hidden"),
-            trail = { Txt(t("Дать", "Grant"), 13, Am, FontWeight.Bold) }) { vm.askDnd() }
-        Txt(t("Во время игры FPS Boost ничего не выполняет в фоне.", "While you play, FPS Boost does nothing in the background."), 11, Mu)
-    }
-}
-
-private fun premiumNeeds(vm: Vm, p: Prof) = vm.premium && p.dnd && !vm.dndOk
-
-@Composable
-fun ProfileEditor(vm: Vm, p: Prof, on: (Prof) -> Unit) {
-    listOf("perf", "max", "bal", "save").forEach { m ->
-        Item(null, modeName(m), if (m == "max" && !vm.premium) "Premium" else null, trail = { MiniCheck(p.mode == m) }) {
-            if (m == "max" && !vm.premium) vm.paywall = true else on(Prof(m, p.clean, p.dnd))
-        }
-    }
-    Item(Ic.trash, t("Очистка перед запуском", "Clean before launch"), t("Только собственный кэш Black Boost", "Only Black Boost's own cache"),
-        trail = { Tog(p.clean) { on(Prof(p.mode, it, p.dnd)) } })
-    Item(Ic.bell, t("Не беспокоить на время игры", "Do Not Disturb during game"), "Game Mode+ · Premium",
-        trail = { Tog(p.dnd) { v -> if (!vm.premium) vm.paywall = true else if (v && !vm.dndOk) vm.askDnd() else on(Prof(p.mode, p.clean, v)) } })
-}
-
-@Composable
-fun GameModeS(vm: Vm) {
-    LaunchedEffect(vm.premium) { while (vm.premium) { vm.pollMon(); delay(1000) } }
-    Page(vm, "Game Mode", bottom = { HotBtn(t("Запустить игру", "Launch game")) { vm.go(Screen.FpsBoost) } }) {
-        Item(Ic.play, t("Системный Game Mode", "System Game Mode"),
-            if (Sys.gameModeSupported()) t("Поддерживается Android 12+. Включается в Game Dashboard игры.", "Supported on Android 12+. Enabled in the game's Game Dashboard.") else t("Недоступно на этом устройстве", "Not available on this device"),
-            trail = { Dot(if (Sys.gameModeSupported()) Ok else Bad) })
-        if (Sys.gameModeSupported()) HotBtn(t("Открыть системный Game Mode", "Open system Game Mode")) {
-            if (!vm.openGameSettings()) vm.toast = vm.tt("На этом телефоне нет отдельного экрана Game Mode. Откройте Game Dashboard из игры.", "No separate Game Mode screen on this phone. Open Game Dashboard from inside a game.")
-        }
-        Txt(t("Профиль по умолчанию", "Default profile"), 16, w = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-        ProfileEditor(vm, vm.defProf) { vm.saveDef(it) }
-        if (vm.premium) {
-            val names = listOf("CPU", "GPU", t("Темп.", "Temp"), "RAM")
-            val vals = listOf(vm.mon[0], vm.mon[1], vm.mon[2], vm.mon[3])
-            val shown = vals.indices.filter { vals[it] != null }
-            Column(Modifier.fillMaxWidth().card().padding(16.dp)) {
-                Txt("Performance Monitor", 14, w = FontWeight.Bold)
-                Txt(t("Только данные, которые отдаёт ваше устройство", "Only data your device exposes"), 11, Mu)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    shown.forEach { i ->
-                        Column(Modifier.weight(1f)) {
-                            Txt(names[i], 11, Mu)
-                            Txt("${vals[i]}" + if (i == 2) "°" else "%", 17, Am, FontWeight.Bold, true)
-                            Spacer(Modifier.height(6.dp)); Bar((vals[i] ?: 0) / (if (i == 2) 60f else 100f))
-                        }
-                    }
+        Box(Modifier.fillMaxWidth(), Alignment.Center) {
+            Ring(vm.score / 100f, 230.dp) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Txt("${vm.score}", 52, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
+                    Txt(t("Оптимизация", "Optimization"), 13, Mu)
                 }
             }
-        } else Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
-                .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(16.dp)).clickable { vm.paywall = true }.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Image(painterResource(R.drawable.ic_crown), null, Modifier.height(28.dp).aspectRatio(828f / 545f))
-            Column(Modifier.weight(1f)) {
-                Txt("Premium Boost", 15, w = FontWeight.Bold, disp = true)
-                Txt(t("Monitor, Game Mode+ и максимальный профиль", "Monitor, Game Mode+ and maximum profile"), 12, Mu)
-            }
         }
-    }
-}
-
-@Composable
-fun ProfileS(vm: Vm) {
-    val pkg = vm.target ?: return
-    val a = vm.appOf(pkg)
-    Page(vm, a?.label ?: "") {
-        ProfileEditor(vm, vm.prof(pkg)) { vm.saveProf(pkg, it) }
-        Txt(t("Убрать из моих игр", "Remove from my games"), 14, Bad, modifier = Modifier.fillMaxWidth().clickable { vm.removeGame(pkg); vm.back() }.padding(14.dp), align = TextAlign.Center)
-    }
-}
-
-@Composable
-fun PickerS(vm: Vm) {
-    var tab by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { vm.loadApps() }
-    val list = if (tab == 0) vm.apps.filter { it.game } else vm.apps
-    Page(vm, t("Добавить игру", "Add a game")) {
-        Tabs(listOf(t("Игры", "Games"), t("Все приложения", "All apps")), tab) { tab = it }
-        if (tab == 0 && list.isEmpty()) Txt(t("Система не пометила ни одно приложение как игру. Откройте вкладку «Все приложения».", "The system did not mark any app as a game. Open the “All apps” tab."), 13, Mu)
-        list.forEach { a ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable {
-                if (a.pkg !in vm.games) { vm.addGame(a.pkg); vm.toast = vm.tt("Игра добавлена", "Game added") }
-                vm.back()
-            }.padding(12.dp, 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                a.icon?.let { Image(it, null, Modifier.size(40.dp)) }
-                Txt(a.label, 15, w = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                MiniCheck(a.pkg in vm.games)
+        HotBtn(if (vm.busy) t("Ускоряем...", "Boosting...") else t("Ускорить сейчас", "Boost now"), !vm.busy) { vm.boost() }
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
+                .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(18.dp)).clickable { vm.go(Screen.Fps) }.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Icon(Ic.bolt, null, Modifier.size(26.dp), tint = Em)
+            Column(Modifier.weight(1f)) {
+                Txt("FPS Boost", 16, disp = true, w = androidx.compose.ui.text.font.FontWeight.Bold)
+                Txt(t("Полная оптимизация для игр", "Full optimization for games"), 12, Mu)
             }
+            Txt("›", 22, Am)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Tile(Ic.trash, t("Очистка", "Cleaner"), ju?.sz() ?: "…") { vm.go(Screen.Clean) }
+            Tile(Ic.battery, t("Батарея", "Battery"), "${vm.bat.pct}%") { vm.go(Screen.Battery) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Tile(Ic.grid, t("Кэш приложений", "App cache"), if (vm.usageOk) vm.apps.sumOf { it.cache }.sz() else "—") { vm.go(Screen.Apps) }
+            Tile(Ic.db, t("Свободно", "Free"), vm.stFree.sz()) { vm.go(Screen.Storage) }
         }
     }
 }
 
 @Composable
 fun CleanS(vm: Vm) {
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { vm.setTree(it) }
-    LaunchedEffect(Unit) { if (vm.phase == "done") vm.phase = "idle" }
+    val ctx = LocalContext.current
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.refresh() }
+    LaunchedEffect(Unit) {
+        if (vm.phase == "done") vm.phase = "idle"
+        if (vm.junk == null && vm.phase == "idle") vm.scan()
+    }
     val inf by rememberInfiniteTransition(label = "s").animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "s")
     val j = vm.junk
     val tot = j?.sumOf { it.bytes } ?: 0L
     val selB = j?.filter { it.id in vm.sel }?.sumOf { it.bytes } ?: 0L
-    Page(vm, t("Очистка", "Cleaner"), bottom = {
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
+    val black = androidx.compose.ui.text.font.FontWeight.Black
+    Page(vm, Screen.Clean, t("Очистка", "Cleaner"), bottom = {
         when {
-            vm.phase == "done" -> HotBtn(t("Готово", "Done")) { vm.back() }
+            vm.phase == "done" -> HotBtn(t("Готово", "Done")) { vm.go(Screen.Home, true) }
             vm.phase == "scanning" -> HotBtn(t("Сканируем...", "Scanning..."), false) {}
             vm.phase == "cleaning" -> HotBtn(t("Идёт очистка...", "Cleaning..."), false) {}
             j != null && tot > 0 -> HotBtn(t("Очистить ", "Clean ") + selB.sz(), selB > 0) { vm.cleanNow() }
@@ -370,93 +166,276 @@ fun CleanS(vm: Vm) {
         }
     }) {
         Box(Modifier.fillMaxWidth(), Alignment.Center) {
-            val rp = when (vm.phase) { "scanning" -> inf; "cleaning" -> vm.progress; "done" -> 1f; else -> if (j != null && tot == 0L) 1f else 0f }
-            Ring(rp, 210.dp, anim = vm.phase != "scanning") {
+            val rp = when (vm.phase) { "scanning" -> inf; "cleaning" -> vm.progress; "done" -> 1f; else -> if (tot > 0) 0f else 1f }
+            Ring(rp, 230.dp, anim = vm.phase != "scanning") {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     when {
-                        vm.phase == "done" -> { CheckMark(64.dp); Txt(t("Очистка завершена", "Cleaning complete"), 13, Tx, FontWeight.SemiBold); Txt(t("Освобождено: ", "Freed: ") + vm.freed.sz(), 13, Mu) }
+                        vm.phase == "done" -> { CheckMark(72.dp); Txt(vm.freed.sz(), 22, disp = true, w = bold); Txt(t("Освобождено", "Freed"), 12, Mu) }
                         vm.phase == "scanning" -> Txt(t("Сканируем...", "Scanning..."), 15, Mu)
-                        vm.phase == "cleaning" -> Txt("${(vm.progress * 100).toInt()}%", 38, disp = true, w = FontWeight.Black)
-                        j == null -> Txt(t("Нажмите «Сканировать»", "Tap “Scan”"), 13, Mu, align = TextAlign.Center)
-                        tot > 0 -> { Txt(t("Можно очистить", "Can clean"), 12, Mu); Txt(tot.sz(), 30, disp = true, w = FontWeight.Black) }
-                        else -> { CheckMark(64.dp); Txt(t("Очищать нечего", "Nothing to clean"), 13, Mu) }
+                        vm.phase == "cleaning" -> Txt("${(vm.progress * 100).toInt()}%", 40, disp = true, w = black)
+                        j == null -> Txt("…", 30, Mu)
+                        tot > 0 -> { Txt(tot.sz(), 32, disp = true, w = black); Txt(t("мусора найдено", "junk found"), 12, Mu) }
+                        else -> { CheckMark(72.dp); Txt(t("Всё чисто", "All clean"), 13, Mu) }
                     }
                 }
             }
         }
-        if (vm.phase == "found") j?.forEach { x ->
-            Item(null, t(x.ru, x.en), null, trail = { Txt(x.bytes.sz(), 13, Am, FontWeight.Bold); Spacer(Modifier.width(10.dp)); MiniCheck(x.id in vm.sel) }) { if (x.bytes > 0) vm.toggle(x.id) }
+        if (!vm.filesOk) Item(Ic.db, t("Нужен доступ ко всем файлам", "All files access needed"),
+            t("Без него ищется только кэш Black Boost", "Without it only Black Boost cache is scanned"),
+            trail = { Txt(t("Дать", "Grant"), 13, Am, bold) }) {
+            if (Build.VERSION.SDK_INT >= 30) Sys.filesSettings(ctx) else perm.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
-        Item(Ic.db, t("Папка для проверки", "Folder to scan"),
-            if (vm.treeUri != null) t("Выбрана вами через системный выбор файлов", "Chosen by you in the system file picker") else t("Не выбрана. Без неё проверяется только кэш Black Boost.", "Not chosen. Only Black Boost's own cache is scanned."),
-            trail = { Txt(if (vm.treeUri != null) t("Сменить", "Change") else t("Выбрать", "Choose"), 13, Am, FontWeight.Bold) }) { pick.launch(null) }
-        if (vm.treeUri != null) Txt(t("Сбросить папку", "Reset folder"), 13, Mu, modifier = Modifier.fillMaxWidth().clickable { vm.setTree(null) }.padding(8.dp), align = TextAlign.Center)
+        if (vm.phase == "found") j?.forEach { x ->
+            Item(null, t(x.ru, x.en), null, trail = {
+                Txt(x.bytes.sz(), 13, Am, bold); Spacer(Modifier.width(10.dp)); MiniCheck(x.id in vm.sel)
+            }) { if (x.bytes > 0) vm.toggle(x.id) }
+        }
     }
 }
 
 @Composable
-fun CacheS(vm: Vm) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(Unit) { vm.loadApps(); vm.refreshOwn() }
-    Page(vm, t("Очистка кэша", "Cache cleaner")) {
-        Column(Modifier.fillMaxWidth().card().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Txt(t("Найдено доступных для очистки данных", "Data available to clean"), 12, Mu)
-            Txt(vm.ownBytes.sz(), 28, Am, FontWeight.Black, true)
-            Txt(t("Это собственный кэш Black Boost. Кэш других приложений Android не даёт удалять напрямую.", "This is Black Boost's own cache. Android does not let apps delete other apps' cache directly."), 12, Mu)
-            HotBtn(t("Очистить кэш Black Boost", "Clear Black Boost cache"), vm.ownBytes > 0) { vm.cleanOwnNow() }
+fun BatteryS(vm: Vm) {
+    val ctx = LocalContext.current
+    val b = vm.bat
+    LaunchedEffect(Unit) { while (true) { vm.refresh(); delay(3000) } }
+    Page(vm, Screen.Battery, t("Батарея", "Battery")) {
+        Column(Modifier.fillMaxWidth().card().padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Txt("${b.pct}", 48, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
+                    Txt("%", 20, Mu, modifier = Modifier.padding(bottom = 6.dp))
+                }
+                Column {
+                    Txt(if (b.charging) t("До полной зарядки", "Until full") else t("Осталось", "Remaining"), 12, Mu)
+                    Txt(b.minutes?.let { "${it / 60} ${t("ч", "h")} ${it % 60} ${t("мин", "min")}" } ?: "—", 19, Am, androidx.compose.ui.text.font.FontWeight.Bold, true)
+                }
+            }
+            Spacer(Modifier.height(16.dp)); Bar(b.pct / 100f); Spacer(Modifier.height(16.dp))
+            HotBtn(t("Оптимизировать", "Optimize"), !vm.busy) { vm.boost(); if (!vm.saver) Sys.saver(ctx) }
         }
-        Item(Ic.db, t("Системная очистка", "System cleanup"), t("Откроется экран Android «Освободить место»", "Opens Android's “Free up space” screen"),
-            trail = { Txt("›", 22, Mu) }) { Sys.manageStorage(ctx) }
-        Txt(t("Кэш приложения → открыть экран Android", "App cache → open the Android screen"), 14, w = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-        Txt(t("В системном экране выберите «Хранилище» → «Очистить кэш».", "On the system screen choose “Storage” → “Clear cache”."), 12, Mu)
-        (vm.apps.filter { it.pkg in vm.games } + vm.apps.filter { it.pkg !in vm.games }).forEach { a ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable { Sys.appInfo(ctx, a.pkg) }.padding(12.dp, 10.dp),
+        Item(Ic.battery, t("Энергосбережение", "Power saving"), if (vm.saver) t("Включено", "On") else t("Выключено", "Off"),
+            trail = { Tog(vm.saver) { Sys.saver(ctx) } }) { Sys.saver(ctx) }
+        Item(Ic.clock, t("Фоновая активность", "Background activity"), t("Оптимизация расхода в фоне", "Background usage optimization"),
+            trail = { Txt("›", 20, Mu) }) { Sys.battOpt(ctx) }
+        Item(Ic.chart, t("Температура батареи", "Battery temperature"), if (b.charging) t("Идёт зарядка", "Charging") else t("Не заряжается", "Not charging"),
+            trail = { Txt("${b.tempC}°C", 15, Am, androidx.compose.ui.text.font.FontWeight.Bold) })
+    }
+}
+
+@Composable
+fun AppsS(vm: Vm) {
+    val ctx = LocalContext.current
+    var tab by remember { mutableIntStateOf(0) }
+    var sel by remember { mutableStateOf<AppInfo?>(null) }
+    LaunchedEffect(vm.usageOk) { vm.loadApps() }
+    val now = System.currentTimeMillis()
+    val list = when (tab) {
+        1 -> vm.apps.sortedByDescending { it.bytes }.take(15)
+        2 -> vm.apps.filter { vm.usageOk && now - it.lastUsed > 30L * 86400000 }.sortedByDescending { it.bytes }
+        else -> vm.apps
+    }
+    val semi = androidx.compose.ui.text.font.FontWeight.SemiBold
+    Page(vm, Screen.Apps, t("Приложения", "Apps")) {
+        Tabs(listOf(t("Все", "All"), t("Крупные", "Large"), t("Неиспользуемые", "Unused")), tab) { tab = it }
+        if (!vm.usageOk) Item(Ic.grid, t("Нужен доступ к статистике", "Usage access needed"),
+            t("Покажет размер, кэш и давность запуска", "Shows size, cache and last use"),
+            trail = { Txt(t("Дать", "Grant"), 13, Am, androidx.compose.ui.text.font.FontWeight.Bold) }) { Sys.usageSettings(ctx) }
+        if (vm.appsLoading && vm.apps.isEmpty()) Txt(t("Загрузка...", "Loading..."), 13, Mu)
+        list.forEach { a ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable { sel = a }.padding(12.dp, 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                a.icon?.let { Image(it, null, Modifier.size(36.dp)) }
-                Txt(a.label, 14, w = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                a.icon?.let { Image(it, null, Modifier.size(40.dp)) }
+                Column(Modifier.weight(1f)) {
+                    Txt(a.label, 15, w = semi)
+                    if (vm.usageOk) Txt(t("Кэш ", "Cache ") + a.cache.sz() + " · " + a.bytes.sz(), 12, Mu)
+                }
                 Txt("›", 20, Mu)
             }
         }
     }
+    sel?.let { a ->
+        Dialog(onDismissRequest = { sel = null }) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Bg).border(1.dp, Ln, RoundedCornerShape(24.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Txt(a.label, 18, w = androidx.compose.ui.text.font.FontWeight.Bold)
+                Item(Ic.trash, t("Очистить кэш", "Clear cache"), t("Откроется экран приложения → Хранилище", "Opens app info → Storage")) { Sys.appInfo(ctx, a.pkg); sel = null }
+                Item(Ic.close, t("Остановить", "Stop"), t("Завершить фоновые процессы", "End background processes")) {
+                    ctx.getSystemService(android.app.ActivityManager::class.java).killBackgroundProcesses(a.pkg)
+                    vm.toast = vm.tt("Запрос на остановку отправлен", "Stop request sent"); sel = null
+                }
+                Item(Ic.trash, t("Удалить", "Uninstall"), t("Системный диалог удаления", "System uninstall dialog")) { Sys.uninstall(ctx, a.pkg); sel = null }
+            }
+        }
+    }
 }
 
 @Composable
-fun EnergyS(vm: Vm) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(Unit) { while (true) { vm.refresh(); delay(3000) } }
-    val b = vm.bat
-    Page(vm, t("Энергосбережение", "Power saving")) {
-        Column(Modifier.fillMaxWidth().card().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Txt("${b.pct}", 44, disp = true, w = FontWeight.Black); Txt("%", 20, Mu, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
-                Spacer(Modifier.weight(1f))
-                Txt("${b.tempC}°C", 16, Am, FontWeight.Bold)
+fun StorageS(vm: Vm) {
+    val ctx = LocalContext.current
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.refresh(); vm.loadStorage() }
+    LaunchedEffect(vm.usageOk, vm.mediaOk) { vm.loadStorage() }
+    val s = vm.stor
+    val tot = (s?.total ?: vm.stTotal).toFloat()
+    val used = tot - vm.stFree
+    val parts = s?.let { listOf(it.apps to Em, it.media to Am, it.docs to Color(0xFFE8DCCB), it.cache to Rd, it.other to Color(0xFF4A4540)) } ?: emptyList()
+    val names = listOf(t("Приложения", "Apps"), t("Фото и видео", "Photos & video"), t("Документы", "Documents"), t("Кэш", "Cache"), t("Система и другое", "System & other"))
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
+    Page(vm, null, t("Хранилище", "Storage"), true, bottom = { HotBtn(t("Очистить мусор", "Clean junk")) { vm.go(Screen.Clean) } }) {
+        Box(Modifier.fillMaxWidth(), Alignment.Center) {
+            Donut(parts.map { it.first / tot to it.second }, 220.dp) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Txt("${(used / tot * 100).toInt()}%", 40, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
+                    Txt(t("Занято", "Used"), 13, Mu)
+                }
             }
-            Bar(b.pct / 100f)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Dot(if (vm.saver) Ok else Off)
-                Txt(if (vm.saver) t("Энергосбережение Android включено", "Android power saving is on") else t("Энергосбережение Android выключено", "Android power saving is off"), 12, Mu)
-            }
-            b.minutes?.let { Txt((if (b.charging) t("До полной зарядки (оценка): ", "Until full (estimate): ") else t("Оценка по текущему расходу: ", "Estimate at current drain: ")) + "${it / 60} ${t("ч", "h")} ${it % 60} ${t("мин", "min")}", 12, Mu) }
         }
-        Item(Ic.battery, t("Энергосбережение Android", "Android power saving"), t("Откроется системная настройка", "Opens the system setting"), trail = { Tog(vm.saver) { Sys.saver(ctx) } }) { Sys.saver(ctx) }
-        Item(Ic.clock, t("Оптимизация расхода в фоне", "Background usage optimization"), t("Системный список приложений", "System app list"), trail = { Txt("›", 22, Mu) }) { Sys.battOpt(ctx) }
-        Txt(t("Поведение Black Boost", "Black Boost behavior"), 16, w = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-        listOf(
-            Triple("save", t("Максимальная экономия", "Maximum saving"), t("Без уведомлений и фоновых проверок", "No notifications or background checks")),
-            Triple("bal", t("Баланс", "Balanced"), t("Обычная работа приложения", "Normal operation")),
-            Triple("perf", t("Производительность", "Performance"), t("Никаких действий во время игры", "No actions during a game"))
-        ).forEach { (id, n, d) -> Item(null, n, d, trail = { MiniCheck(vm.energy == id) }) { vm.changeEnergy(id) } }
-        Txt(t("Время работы зависит от устройства, игры, яркости и температуры, поэтому приложение не обещает конкретный процент.", "Battery life depends on device, game, brightness and temperature, so the app does not promise a specific percentage."), 11, Mu)
+        Column(Modifier.fillMaxWidth().card().padding(16.dp, 8.dp)) {
+            parts.forEachIndexed { i, (v, c) ->
+                Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(c))
+                    Txt(names[i], 14, modifier = Modifier.weight(1f)); Txt(v.sz(), 14, w = bold)
+                }
+            }
+        }
+        if (!vm.usageOk) Item(Ic.grid, t("Доступ к статистике", "Usage access"), t("Нужен для размера приложений и кэша", "Needed for app sizes and cache"),
+            trail = { Txt(t("Дать", "Grant"), 13, Am, bold) }) { Sys.usageSettings(ctx) }
+        if (!vm.mediaOk) Item(Ic.db, t("Доступ к фото и видео", "Photos & video access"), t("Нужен для подсчёта медиа", "Needed to count media"),
+            trail = { Txt(t("Дать", "Grant"), 13, Am, bold) }) {
+            perm.launch(if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO) else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+        }
+        Column(Modifier.fillMaxWidth().card().padding(16.dp)) {
+            Txt(t("Свободно места", "Free space"), 12, Mu)
+            Txt(vm.stFree.sz(), 20, Am, bold, true)
+            Spacer(Modifier.height(10.dp)); Bar(vm.stFree / tot)
+        }
+    }
+}
+
+suspend fun measureFps(ms: Long): Float {
+    var t0 = 0L
+    withFrameNanos { t0 = it }
+    var last = t0
+    var n = 0
+    while ((last - t0) / 1_000_000 < ms) { last = withFrameNanos { it }; n++ }
+    return n * 1e9f / (last - t0)
+}
+
+@Composable
+fun FpsS(vm: Vm, act: Activity) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var mode by remember { mutableIntStateOf(1) }
+    var fps by remember { mutableFloatStateOf(0f) }
+    var res by remember { mutableStateOf<String?>(null) }
+    var run by remember { mutableStateOf(false) }
+    val steps = remember { mutableStateListOf<String?>(null, null, null, null, null) }
+    val disp = remember { (act.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay }
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
+    LaunchedEffect(Unit) { vm.loadApps(); fps = measureFps(1000) }
+    LaunchedEffect(vm.premium) { while (vm.premium) { vm.pollMon(); delay(1000) } }
+    val names = listOf(t("Очистка ОЗУ", "RAM cleanup"), t("Мусор и кэш", "Junk & cache"), t("Режим производительности", "Performance mode"), t("Частота обновления", "Refresh rate"), t("Game Mode+", "Game Mode+"))
+    val games = vm.apps.filter { it.game }.ifEmpty { vm.apps.take(8) }
+
+    fun start() {
+        if (run) return
+        run = true; res = null
+        for (i in steps.indices) steps[i] = null
+        scope.launch {
+            val before = measureFps(1200)
+            val skip = "—"
+            steps[0] = vm.stepRam(); delay(250)
+            steps[1] = if (mode >= 1) vm.stepJunk() else skip; delay(250)
+            steps[2] = if (mode >= 1) {
+                val pm = act.getSystemService(PowerManager::class.java)
+                if (pm.isSustainedPerformanceModeSupported) { act.window.setSustainedPerformanceMode(true); vm.tt("Вкл", "On") } else vm.tt("Нет", "N/A")
+            } else skip
+            delay(250)
+            steps[3] = if (mode >= 2) {
+                val cur = disp.mode
+                val best = disp.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }.maxByOrNull { it.refreshRate }
+                if (best != null) {
+                    val lp = act.window.attributes; lp.preferredDisplayModeId = best.modeId; act.window.attributes = lp
+                    "${best.refreshRate.toInt()} Hz"
+                } else skip
+            } else skip
+            delay(250)
+            steps[4] = if (mode >= 2 && vm.premium && vm.gameMode) { if (vm.dndOk) "DND" else { Sys.dnd(ctx); "?" } } else skip
+            delay(300)
+            val after = measureFps(1200)
+            fps = after; res = "${before.toInt()} → ${after.toInt()} FPS"; run = false
+        }
+    }
+
+    Page(vm, null, "FPS Boost", true, bottom = { HotBtn(if (run) t("Оптимизируем...", "Optimizing...") else t("Запустить FPS Boost", "Start FPS Boost"), !run) { start() } }) {
+        Box(Modifier.fillMaxWidth(), Alignment.Center) {
+            Ring(fps / 120f, 200.dp) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Txt("${fps.toInt()}", 48, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
+                    Txt("FPS", 12, Mu)
+                }
+            }
+        }
+        Txt(res?.let { t("Замер до и после: ", "Measured before / after: ") + it } ?: t("Экран: ", "Display: ") + "${disp.refreshRate.toInt()} Hz · max ${disp.supportedModes.maxOf { it.refreshRate }.toInt()} Hz",
+            13, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
+        Tabs(listOf(t("Базовый", "Basic"), t("Высокий", "High"), t("Максимальный", "Maximum")), mode) { i ->
+            if (run) return@Tabs
+            if (i == 2 && !vm.premium) vm.paywall = true else mode = i
+        }
+        if (!vm.premium) Txt(t("Максимальный режим доступен в Premium", "Maximum mode requires Premium"), 11, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
+        steps.forEachIndexed { i, v ->
+            Item(null, names[i], null, trail = {
+                if (v != null) Txt(v, 13, Am, bold)
+                else if (run) Txt("…", 13, Mu)
+            })
+        }
+        if (vm.premium) {
+            Column(Modifier.fillMaxWidth().card().padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Txt("Performance Monitor", 14, w = bold, modifier = Modifier.weight(1f))
+                    Txt("Live", 12, Mu)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf("CPU" to 0, "GPU" to 1, t("Темп.", "Temp") to 2, "RAM" to 3).forEach { (n, i) ->
+                        Column(Modifier.weight(1f)) {
+                            Txt(n, 11, Mu)
+                            Txt(vm.mon[i]?.let { "$it" + if (i == 2) "°" else "%" } ?: "—", 17, Am, bold, true)
+                            Spacer(Modifier.height(6.dp)); Bar((vm.mon[i] ?: 0) / (if (i == 2) 60f else 100f))
+                        }
+                    }
+                }
+            }
+            Item(Ic.bolt, "Game Mode+", t("Не беспокоить на время игры", "Do Not Disturb while gaming"),
+                trail = { Tog(vm.gameMode) { on -> vm.changeGameMode(on); if (on && !vm.dndOk) Sys.dnd(ctx) } })
+        } else Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
+                .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(16.dp)).clickable { vm.paywall = true }.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Image(painterResource(R.drawable.ic_crown), null, Modifier.height(28.dp).aspectRatio(828f / 545f))
+            Column(Modifier.weight(1f)) {
+                Txt("Premium Boost", 15, w = bold, disp = true)
+                Txt(t("Монитор, Game Mode+ и максимальный режим", "Monitor, Game Mode+ and Maximum mode"), 12, Mu)
+            }
+        }
+        Txt(t("Запуск игры с Boost", "Launch game with Boost"), 14, w = bold)
+        if (games.isEmpty()) Txt(t("Приложения не найдены", "No apps found"), 12, Mu)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            games.forEach { a ->
+                Column(Modifier.width(72.dp).clip(RoundedCornerShape(14.dp)).clickable { vm.launchGame(act, a.pkg) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    a.icon?.let { Image(it, null, Modifier.size(52.dp)) }
+                    Txt(a.label, 11, Mu, align = TextAlign.Center)
+                }
+            }
+        }
     }
 }
 
 @Composable
 fun SettingsS(vm: Vm) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val ctx = LocalContext.current
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.changeNotif(ok) }
-    LaunchedEffect(Unit) { vm.refresh() }
-    Page(vm, t("Настройки", "Settings")) {
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
+    Page(vm, Screen.Settings, t("Настройки", "Settings")) {
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
                 .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(18.dp)).clickable { vm.paywall = true }.padding(16.dp),
@@ -464,39 +443,30 @@ fun SettingsS(vm: Vm) {
         ) {
             Image(painterResource(R.drawable.ic_crown), null, Modifier.height(30.dp).aspectRatio(828f / 545f))
             Column(Modifier.weight(1f)) {
-                Txt("Premium Boost", 16, disp = true, w = FontWeight.Bold)
+                Txt("Premium Boost", 16, disp = true, w = bold)
                 Txt(if (vm.premium) t("Активен навсегда", "Active forever") else t("Получить Premium", "Get Premium"), 12, Mu)
             }
-            Txt(if (vm.premium) t("Активен", "Active") else "›", 15, Am, FontWeight.Bold, true)
+            Txt(if (vm.premium) t("Активен", "Active") else "›", 15, Am, bold, true)
         }
         Column(Modifier.fillMaxWidth().card().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Icon(Ic.globe, null, Modifier.size(24.dp), tint = Em); Txt(t("Язык", "Language"), 15, w = FontWeight.Bold)
+                Icon(Ic.globe, null, Modifier.size(24.dp), tint = Em); Txt(t("Язык", "Language"), 15, w = bold)
             }
             Tabs(listOf("Русский", "English"), if (vm.lang == "en") 1 else 0) { vm.changeLang(if (it == 1) "en" else "ru") }
         }
-        Item(Ic.bell, t("Уведомления", "Notifications"), t("Мало места и перегрев батареи", "Low storage and battery overheating"), trail = {
-            Tog(vm.notif && vm.notifOk) { on ->
-                if (on && !vm.notifOk) vm.explain = Explain(vm.tt("Разрешение на уведомления", "Notification permission"),
-                    vm.tt("Нужно только для предупреждений о нехватке места и перегреве. Без него приложение работает полностью.", "Only needed for low-storage and overheating alerts. The app works fully without it.")) {
-                    if (Build.VERSION.SDK_INT >= 33) perm.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.changeNotif(true)
-                } else vm.changeNotif(on)
+        Item(Ic.bell, t("Уведомления", "Notifications"), t("Включить оповещения", "Turn on alerts"), trail = {
+            Tog(vm.notif) { on ->
+                if (on && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    perm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                else vm.changeNotif(on)
             }
         })
-        Txt(t("Разрешения", "Permissions"), 16, w = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-        Item(Ic.bell, t("Уведомления", "Notifications"), if (vm.notifOk) t("Разрешено", "Allowed") else t("Не требуется для работы", "Not required to use the app"),
-            trail = { Dot(if (vm.notifOk) Ok else Off) }) { Sys.notifSettings(ctx) }
-        Item(Ic.play, t("Не беспокоить", "Do Not Disturb"), if (vm.dndOk) t("Доступ выдан (Game Mode+)", "Access granted (Game Mode+)") else t("Нужен только для Game Mode+", "Only needed for Game Mode+"),
-            trail = { Dot(if (vm.dndOk) Ok else if (vm.premium) Warn else Off) }) { vm.askDnd() }
-        Item(Ic.db, t("Папка для очистки", "Cleanup folder"), if (vm.treeUri != null) t("Выбрана вами", "Chosen by you") else t("Не выбрана", "Not chosen"),
-            trail = { Dot(if (vm.treeUri != null) Ok else Off) }) { vm.go(Screen.Clean) }
-        Txt(t("Black Boost не изменяет системные файлы и не просит доступ ко всем файлам, камере, микрофону, контактам или геолокации.", "Black Boost does not modify system files and never asks for full storage, camera, microphone, contacts or location access."), 11, Mu)
-        Txt("Black Boost 1.0.0", 11, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
     }
 }
 
 @Composable
 fun Paywall(vm: Vm, act: Activity) {
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Dialog(onDismissRequest = { vm.paywall = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.padding(16.dp)) {
             Column(
@@ -506,18 +476,18 @@ fun Paywall(vm: Vm, act: Activity) {
             ) {
                 Image(painterResource(R.drawable.ic_crown), null, Modifier.height(90.dp).aspectRatio(828f / 545f))
                 Spacer(Modifier.height(10.dp))
-                Txt("Premium Boost", 26, disp = true, w = FontWeight.Black, brush = Hot)
+                Txt("Premium Boost", 26, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black, brush = Hot)
                 Spacer(Modifier.height(6.dp))
                 if (vm.premium) {
-                    Txt(t("Premium активирован", "Premium activated"), 16, w = FontWeight.Bold)
+                    Txt(t("Premium активирован", "Premium activated"), 16, w = bold)
                     Txt(t("Все функции открыты. Спасибо!", "All features unlocked. Thank you!"), 13, Mu)
                     Spacer(Modifier.height(20.dp))
                     HotBtn(t("Продолжить", "Continue")) { vm.paywall = false }
                 } else {
-                    Txt(t("Получи максимум с Premium", "Get the most with Premium"), 15, w = FontWeight.SemiBold)
+                    Txt(t("Получи максимум с Premium", "Get the most with Premium"), 15, w = androidx.compose.ui.text.font.FontWeight.SemiBold)
                     Spacer(Modifier.height(16.dp))
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xAA0E0E0E)).border(1.dp, Ln, RoundedCornerShape(16.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Txt(t("Premium включает:", "Premium includes:"), 13, w = FontWeight.Bold)
+                        Txt(t("Premium включает:", "Premium includes:"), 13, w = bold)
                         listOf(
                             "Performance Monitor" to t("Нагрузка CPU, GPU и температура в реальном времени.", "CPU and GPU load and temperature in real time."),
                             "Game Mode+" to t("Идеальный режим для запуска игр", "The perfect mode for launching games"),
@@ -526,7 +496,7 @@ fun Paywall(vm: Vm, act: Activity) {
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(Hot))
                                 Column {
-                                    if (h != null) Txt(h, 13, w = FontWeight.Bold)
+                                    if (h != null) Txt(h, 13, w = bold)
                                     Txt(d, 12, if (h != null) Mu else Tx)
                                 }
                             }
@@ -535,9 +505,9 @@ fun Paywall(vm: Vm, act: Activity) {
                     Spacer(Modifier.height(16.dp))
                     Txt(t("Навсегда", "Forever"), 12, Mu)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Txt(vm.billing.price ?: "49 ₽", 38, disp = true, w = FontWeight.Black)
+                        Txt(vm.billing.price ?: "49 ₽", 38, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
                         Txt("99 ₽", 20, Mu, deco = TextDecoration.LineThrough)
-                        Box(Modifier.rotate(-4f).clip(RoundedCornerShape(50)).background(Hot).padding(10.dp, 5.dp)) { Txt("−50%", 13, Ink, FontWeight.ExtraBold) }
+                        Box(Modifier.rotate(-4f).clip(RoundedCornerShape(50)).background(Hot).padding(10.dp, 5.dp)) { Txt("−50%", 13, Ink, androidx.compose.ui.text.font.FontWeight.ExtraBold) }
                     }
                     Spacer(Modifier.height(16.dp))
                     HotBtn(t("Оплатить", "Pay")) {

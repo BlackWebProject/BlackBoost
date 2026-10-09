@@ -29,5 +29,4 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("com.android.billingclient:billing:7.0.0")
-    implementation("androidx.documentfile:documentfile:1.0.1")
 }
