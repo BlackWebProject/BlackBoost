@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
+import android.os.Build
 import androidx.compose.runtime.*
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,7 +12,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Screen { Splash, Home, Clean, Battery, Apps, Storage, Fps, Settings }
+enum class Screen { Splash, Home, Clean, Battery, Apps, Storage, Fps, Settings, Monitor, Perms, Net }
+class Explain(val title: String, val text: String, val action: () -> Unit)
+class Rep(val text: String, val ok: Boolean, val fix: (() -> Unit)? = null)
+class QuickRes(val ram: Long, val files: Long)
 
 class Vm(app: Application) : AndroidViewModel(app) {
     private val c: Context get() = getApplication()
@@ -21,6 +25,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
     private val stack = ArrayList<Screen>()
     fun go(s: Screen, tab: Boolean = false) { if (tab) stack.clear() else stack.add(screen); screen = s }
     fun back() {
+        if (screen == Screen.Clean && detail != null) { detail = null; return }
         if (stack.isNotEmpty()) screen = stack.removeAt(stack.size - 1)
         else if (screen != Screen.Home) screen = Screen.Home
     }
@@ -31,6 +36,8 @@ class Vm(app: Application) : AndroidViewModel(app) {
     var gameMode by mutableStateOf(prefs.gameMode)
     var paywall by mutableStateOf(false)
     var toast by mutableStateOf<String?>(null)
+    var explain by mutableStateOf<Explain?>(null)
+    var quickRes by mutableStateOf<QuickRes?>(null)
     fun tt(ru: String, en: String) = if (lang == "en") en else ru
 
     var ramFree by mutableLongStateOf(0L)
@@ -43,17 +50,40 @@ class Vm(app: Application) : AndroidViewModel(app) {
     var filesOk by mutableStateOf(false)
     var mediaOk by mutableStateOf(false)
     var dndOk by mutableStateOf(false)
+    var hot by mutableStateOf(false)
 
     var apps by mutableStateOf<List<AppInfo>>(emptyList())
     var appsLoading by mutableStateOf(false)
     var stor by mutableStateOf<Stor?>(null)
-    var junk by mutableStateOf<List<Junk>?>(null)
-    var sel by mutableStateOf(setOf<String>())
+    var fg by mutableStateOf<List<Pair<AppInfo, Long>>>(emptyList())
+    var sens by mutableStateOf<Map<String, Set<String>>>(emptyMap())
+    var permsBusy by mutableStateOf(false)
+    var netRes by mutableStateOf<NetRes?>(null)
+    var netBusy by mutableStateOf(false)
+    var mon by mutableStateOf<List<Int?>>(listOf(null, null, null, null))
+    private val cpuS = Sys.CpuSampler()
+    var histVer by mutableIntStateOf(0)
+
+    // ---- очистка ----
+    var cats by mutableStateOf<List<Cat>?>(null)
+    var selF by mutableStateOf(setOf<String>())
+    var detail by mutableStateOf<String?>(null)
     var phase by mutableStateOf("idle") // idle, scanning, found, cleaning, done
+    var stage by mutableStateOf("")
     var progress by mutableFloatStateOf(0f)
     var freed by mutableLongStateOf(0L)
-    var busy by mutableStateOf(false)
-    var mon by mutableStateOf<List<Int?>>(listOf(null, null, null, null))
+    var quickBusy by mutableStateOf(false)
+    var legacyAsk: (() -> Unit)? = null
+
+    // ---- игры ----
+    var gProf by mutableStateOf(prefs.gProf)
+    var gMode by mutableIntStateOf(prefs.gMode)
+    var gSel by mutableStateOf<String?>(null)
+    var gBusy by mutableStateOf(false)
+    var gReady by mutableStateOf(false)
+    var report by mutableStateOf<List<Rep>>(emptyList())
+    var ramBefore by mutableLongStateOf(0L)
+    var ramAfter by mutableLongStateOf(0L)
     private var dndAt = 0L
 
     val billing = Billing(app) { grantPremium() }
@@ -64,11 +94,16 @@ class Vm(app: Application) : AndroidViewModel(app) {
     fun changeLang(l: String) { lang = l; prefs.lang = l }
     fun changeNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on) }
     fun changeGameMode(on: Boolean) { gameMode = on; prefs.gameMode = on }
+    fun changeProf(p: String) { gProf = p; prefs.gProf = p; gReady = false }
+    fun changeGMode(m: Int) { gMode = m; prefs.gMode = m; gReady = false }
+    fun addGame(pkg: String) { prefs.games = prefs.games + pkg }
+    fun userGames(): Set<String> = prefs.games
+    fun appOf(pkg: String?) = apps.firstOrNull { it.pkg == pkg }
 
     fun refresh() {
         Sys.mem(c).let { ramFree = it.first; ramTotal = it.second }
         Sys.storage().let { stFree = it.first; stTotal = it.second }
-        bat = Sys.battery(c); saver = Sys.powerSave(c)
+        bat = Sys.battery(c); saver = Sys.powerSave(c); hot = bat.tempC >= 42f
         usageOk = Sys.hasUsage(c); filesOk = Sys.hasFiles(c); mediaOk = Sys.hasMedia(c); dndOk = Sys.hasDnd(c)
     }
 
@@ -77,17 +112,43 @@ class Vm(app: Application) : AndroidViewModel(app) {
         if (System.currentTimeMillis() - dndAt > 4000) restoreDnd()
     }
 
-    /** Оценка 0..100 по реальным показателям: свободная ОЗУ, место, мусор, температура батареи. */
+    /** Оценка 0..100 по реальным показателям. */
     val score: Int
         get() {
             val ram = minOf(35f, ramFree * 100f / ramTotal / 45f * 35f)
             val st = minOf(35f, stFree * 100f / stTotal / 30f * 35f)
-            val j = junk?.sumOf { it.bytes }
+            val j = cats?.sumOf { it.bytes }
             val jp = if (j == null) 10f else maxOf(0f, 20f - j / 1_000_000f / 50f)
             val bp = if (bat.tempC < 40f) 10f else if (bat.tempC < 45f) 5f else 0f
             return (ram + st + jp + bp).toInt().coerceIn(0, 100)
         }
 
+    // ---- запросы разрешений с объяснением ----
+    fun askFiles() {
+        explain = Explain(
+            tt("Доступ к файлам", "File access"),
+            tt("Нужен, чтобы найти кэш, старые загрузки, большие файлы и дубликаты фото и видео и заранее показать, сколько места освободится. Удаляется только то, что вы отметили.",
+                "Needed to find cache, old downloads, large files and duplicate photos/videos and show how much space will be freed. Only what you select is deleted.")
+        ) { if (Build.VERSION.SDK_INT >= 30) Sys.filesSettings(c) else legacyAsk?.invoke() }
+    }
+
+    fun askUsage() {
+        explain = Explain(
+            tt("Доступ к статистике использования", "Usage access"),
+            tt("Нужен, чтобы показать размер приложений, давно не используемые приложения и время на экране. Данные остаются на телефоне.",
+                "Needed to show app sizes, unused apps and screen time. Data stays on your phone.")
+        ) { Sys.usageSettings(c) }
+    }
+
+    fun askDnd() {
+        explain = Explain(
+            tt("Доступ «Не беспокоить»", "Do Not Disturb access"),
+            tt("Нужен, чтобы на время игры скрывать уведомления и вернуть прежний режим после неё.",
+                "Needed to silence notifications during a game and restore your previous mode afterwards.")
+        ) { Sys.dnd(c) }
+    }
+
+    // ---- данные ----
     fun loadApps() {
         viewModelScope.launch { appsLoading = true; apps = withContext(Dispatchers.IO) { Sys.apps(c) }; appsLoading = false }
     }
@@ -99,49 +160,133 @@ class Vm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun scan() {
-        if (phase == "scanning" || phase == "cleaning") return
-        phase = "scanning"
+    fun loadFg() {
         viewModelScope.launch {
-            val r = Cleaner.scan(c, filesOk)
-            junk = r; sel = r.filter { it.bytes > 0 }.map { it.id }.toSet(); phase = "found"
+            if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
+            val m = withContext(Dispatchers.IO) { Sys.fgUsage(c) }
+            fg = apps.mapNotNull { a -> m[a.pkg]?.takeIf { it > 60000L }?.let { a to it } }.sortedByDescending { it.second }.take(6)
         }
     }
 
-    fun toggle(id: String) { sel = if (id in sel) sel - id else sel + id }
-
-    fun cleanNow() {
-        val items = junk?.filter { it.id in sel && it.bytes > 0 } ?: return
-        phase = "cleaning"; progress = 0f
+    fun loadSens() {
         viewModelScope.launch {
-            freed = Cleaner.clean(items) { progress = it }
-            phase = "done"; junk = null; refresh()
+            permsBusy = true
+            if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
+            sens = withContext(Dispatchers.IO) { Sys.sensitive(c, apps.map { it.pkg }) }
+            permsBusy = false
         }
     }
 
-    fun boost() {
-        if (busy) return
-        busy = true
-        viewModelScope.launch {
-            val (f, n) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
-            refresh(); busy = false
-            toast = tt("Освобождено ${f / 1_000_000} MB ОЗУ · приложений: $n", "Freed ${f / 1_000_000} MB RAM · apps: $n")
-        }
-    }
-
-    suspend fun stepRam(): String {
-        val (f, _) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
-        refresh(); return "+${f / 1_000_000} MB"
-    }
-
-    suspend fun stepJunk(): String = withContext(Dispatchers.IO) {
-        val items = Cleaner.scan(c, filesOk).filter { it.id == "cache" || it.id == "tmp" || it.id == "sys" }
-        "+" + Cleaner.clean(items) {}.sz()
+    fun runNet() {
+        if (netBusy) return
+        netBusy = true; netRes = null
+        viewModelScope.launch { netRes = Net.test(c); netBusy = false }
     }
 
     fun pollMon() {
         refresh()
-        mon = listOf(Sys.cpu(), Sys.gpu(), bat.tempC.toInt(), ((ramTotal - ramFree) * 100 / ramTotal).toInt())
+        mon = listOf(cpuS.read() ?: Sys.cpu(), Sys.gpu(), bat.tempC.toInt(), ((ramTotal - ramFree) * 100 / ramTotal).toInt())
+    }
+
+    // ---- очистка ----
+    fun scanClean() {
+        if (phase == "scanning" || phase == "cleaning") return
+        if (!filesOk) { askFiles(); return }
+        phase = "scanning"; stage = ""
+        viewModelScope.launch {
+            val r = Cleaner.scan(c) { stage = it }
+            cats = r; selF = r.flatMap { it.files }.filter { it.def }.map { it.path }.toSet(); phase = "found"
+        }
+    }
+
+    fun selBytes(): Long = cats?.sumOf { k -> k.files.filter { it.path in selF }.sumOf { it.size } } ?: 0L
+    fun catSelAll(k: Cat) = k.files.isNotEmpty() && k.files.all { it.path in selF }
+    fun toggleCat(k: Cat) {
+        val paths = k.files.map { it.path }
+        selF = if (catSelAll(k)) selF - paths.toSet() else selF + paths
+    }
+    fun toggleFile(f: Fi) { selF = if (f.path in selF) selF - f.path else selF + f.path }
+
+    fun cleanNow() {
+        val all = cats ?: return
+        var list = all.flatMap { it.files }.filter { it.path in selF }
+        // защита: если выбраны все копии, оригинал остаётся
+        val dupTotal = all.firstOrNull { it.id == "dup" }?.files?.groupBy { it.group }?.mapValues { it.value.size } ?: emptyMap()
+        val keep = list.filter { it.group > 0 }.groupBy { it.group }
+            .filter { (g, l) -> l.size >= (dupTotal[g] ?: Int.MAX_VALUE) }
+            .values.mapNotNull { l -> l.firstOrNull { it.orig }?.path }.toSet()
+        list = list.filter { it.path !in keep }
+        phase = "cleaning"; progress = 0f
+        viewModelScope.launch {
+            freed = Cleaner.delete(list) { progress = it }
+            prefs.addHist(freed); histVer++
+            phase = "done"; cats = null; refresh()
+        }
+    }
+
+    // ---- быстрая оптимизация ----
+    fun quick() {
+        explain = Explain(
+            tt("Быстрая оптимизация", "Quick optimization"),
+            tt("Приложение попросит Android завершить фоновые процессы (система может не выполнить запрос) и удалит безопасный мусор: собственный кэш и временные файлы. Личные файлы не затрагиваются.",
+                "The app will ask Android to end background processes (the system may ignore it) and delete safe junk: its own cache and temp files. Personal files are not touched.")
+        ) { runQuick() }
+    }
+
+    private fun runQuick() {
+        if (quickBusy) return
+        quickBusy = true
+        viewModelScope.launch {
+            val (f, _) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
+            val files = Cleaner.quick(c, filesOk)
+            prefs.addHist(files); histVer++
+            refresh(); quickBusy = false
+            quickRes = QuickRes(f, files)
+        }
+    }
+
+    // ---- Game Booster ----
+    fun prepareGame() {
+        val pkg = gSel ?: return
+        if (gBusy) return
+        gBusy = true; gReady = false; report = emptyList(); ramBefore = Sys.mem(c).first
+        viewModelScope.launch {
+            val r = ArrayList<Rep>()
+            val (f, n) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
+            refresh(); ramAfter = ramFree
+            r.add(Rep(tt("Запрос на завершение фоновых процессов отправлен ($n прил.). Освобождено: ${f.sz()}. Android может перезапустить часть процессов.",
+                "Background process stop request sent ($n apps). Freed: ${f.sz()}. Android may restart some of them."), true))
+            if (gMode >= 1) {
+                val fr = Cleaner.cleanOwn(c)
+                r.add(Rep(tt("Собственный кэш Black Boost очищен: ${fr.sz()}", "Black Boost cache cleared: ${fr.sz()}"), true))
+            }
+            if (gMode >= 2) {
+                if (!premium) r.add(Rep(tt("Game Mode+ («Не беспокоить») доступен в Premium", "Game Mode+ (Do Not Disturb) requires Premium"), false) { paywall = true })
+                else if (!gameMode) r.add(Rep(tt("Game Mode+ выключен: включите переключатель ниже", "Game Mode+ is off: turn on the switch below"), false))
+                else if (dndOk) r.add(Rep(tt("«Не беспокоить» включится на время игры и вернётся после неё", "Do Not Disturb will turn on for the game and be restored afterwards"), true))
+                else r.add(Rep(tt("«Не беспокоить»: нужен доступ, выдайте вручную", "Do Not Disturb: access needed, grant it manually"), false) { askDnd() })
+            }
+            if (gProf == "perf") {
+                if (saver) r.add(Rep(tt("Энергосбережение Android включено и снижает производительность. Отключите вручную.", "Android power saving is on and reduces performance. Turn it off manually."), false) { Sys.saver(c) })
+                else r.add(Rep(tt("Энергосбережение Android выключено", "Android power saving is off"), true))
+                r.add(Rep(tt("Частота обновления: выберите максимальную (Настройки → Дисплей). Приложение не может менять её само.", "Refresh rate: choose the highest (Settings → Display). The app cannot change it."), false) { Sys.display(c) })
+                r.add(Rep(tt("Графика: в настройках самой игры выберите высокий FPS и умеренное качество теней.", "Graphics: in the game's own settings pick high FPS and moderate shadow quality."), false))
+            } else {
+                if (!saver) r.add(Rep(tt("Включите энергосбережение Android вручную, чтобы сэкономить заряд", "Turn on Android power saving manually to save battery"), false) { Sys.saver(c) })
+                else r.add(Rep(tt("Энергосбережение Android включено", "Android power saving is on"), true))
+                r.add(Rep(tt("Частота обновления: выберите 60 Гц (Настройки → Дисплей).", "Refresh rate: choose 60 Hz (Settings → Display)."), false) { Sys.display(c) })
+                r.add(Rep(tt("Графика: в настройках игры снизьте качество и ограничьте FPS.", "Graphics: in the game's settings lower quality and cap FPS."), false))
+            }
+            report = r; gBusy = false; gReady = true
+        }
+    }
+
+    fun launchGame(a: Activity) {
+        val pkg = gSel ?: return
+        if (premium && gameMode && gMode >= 2 && dndOk) dndOn()
+        val i = c.packageManager.getLaunchIntentForPackage(pkg)
+        if (i == null) { toast = tt("Не удалось запустить игру", "Could not launch the game"); return }
+        a.startActivity(i)
     }
 
     private fun dndOn() {
@@ -159,15 +304,6 @@ class Vm(app: Application) : AndroidViewModel(app) {
             val nm = c.getSystemService(NotificationManager::class.java)
             if (nm.isNotificationPolicyAccessGranted) nm.setInterruptionFilter(p)
             prefs.dndPrev = -1
-        }
-    }
-
-    /** Запуск игры: сначала освобождаем ОЗУ, при Game Mode+ включаем «Не беспокоить» на время игры. */
-    fun launchGame(a: Activity, pkg: String) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { Sys.boostRam(c) }
-            if (premium && gameMode && dndOk) dndOn()
-            a.packageManager.getLaunchIntentForPackage(pkg)?.let { a.startActivity(it) }
         }
     }
 }

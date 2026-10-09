@@ -34,6 +34,9 @@ class HealthWorker(c: Context, p: WorkerParameters) : Worker(c, p) {
         val s = Sys.storage()
         if (s.first * 100 / s.second < 15) Notify.post(applicationContext, if (en) "Low storage" else "Мало места", if (en) "Less than 15% free. Open Black Boost to clean up." else "Свободно меньше 15%. Откройте Black Boost для очистки.")
         if (Sys.battery(applicationContext).tempC >= 43f) Notify.post(applicationContext, if (en) "Phone is hot" else "Телефон нагрелся", if (en) "Battery temperature is high. Close heavy apps." else "Температура батареи высокая. Закройте тяжёлые приложения.")
+        val last = Prefs(applicationContext).lastClean
+        if (System.currentTimeMillis() - last > 7 * 86400000L && s.first * 100 / s.second < 40)
+            Notify.post(applicationContext, if (en) "Time to check storage" else "Пора проверить хранилище", if (en) "No cleanup for a week. Open Black Boost and run a scan." else "Неделю не было очистки. Откройте Black Boost и запустите сканирование.")
         return Result.success()
     }
 }

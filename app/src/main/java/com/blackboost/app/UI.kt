@@ -213,3 +213,8 @@ fun NavBar(cur: Screen, go: (Screen) -> Unit) {
         }
     }
 }
+
+val Ok = Color(0xFF3DDC84); val Warn = Color(0xFFFFC107); val Off = Color(0xFF8F8980); val Bad = Color(0xFFFF5252)
+
+@Composable
+fun Dot(c: Color) { Box(Modifier.size(9.dp).clip(CircleShape).background(c)) }

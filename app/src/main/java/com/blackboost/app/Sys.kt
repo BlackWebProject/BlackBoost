@@ -187,4 +187,59 @@ object Sys {
     fun battOpt(c: Context) = go(c, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
     fun dnd(c: Context) = go(c, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
     fun uninstall(c: Context, p: String) = go(c, Intent(Intent.ACTION_DELETE, Uri.parse("package:$p")))
+
+    fun model() = Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + Build.MODEL
+    fun androidVer() = "Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+    fun thermal(c: Context): Int? = if (Build.VERSION.SDK_INT >= 29) c.getSystemService(PowerManager::class.java).currentThermalStatus else null
+    fun display(c: Context) = go(c, Intent(Settings.ACTION_DISPLAY_SETTINGS))
+
+    /** Время на экране за 24 часа (нужен доступ к статистике использования). */
+    fun fgUsage(c: Context): Map<String, Long> {
+        if (!hasUsage(c)) return emptyMap()
+        val now = System.currentTimeMillis()
+        return c.getSystemService(UsageStatsManager::class.java).queryAndAggregateUsageStats(now - 86400000L, now).mapValues { it.value.totalTimeInForeground }
+    }
+
+    /** Загрузка CPU из /proc/stat. На многих телефонах Android 8+ файл закрыт, тогда вернёт null. */
+    class CpuSampler {
+        private var prev: LongArray? = null
+        fun read(): Int? {
+            val l = try { File("/proc/stat").bufferedReader().use { it.readLine() } } catch (e: Exception) { null } ?: return null
+            val n = l.trim().split(Regex("\\s+")).drop(1).mapNotNull { it.toLongOrNull() }
+            if (n.size < 4) return null
+            val idle = n[3] + (n.getOrNull(4) ?: 0L)
+            val tot = n.sum()
+            val p = prev
+            prev = longArrayOf(idle, tot)
+            if (p == null) return null
+            val dt = tot - p[1]
+            return if (dt > 0) (100 * (dt - (idle - p[0])) / dt).toInt().coerceIn(0, 100) else null
+        }
+    }
+
+    private val SENS = mapOf(
+        "android.permission.CAMERA" to "camera", "android.permission.RECORD_AUDIO" to "mic",
+        "android.permission.ACCESS_FINE_LOCATION" to "loc", "android.permission.ACCESS_COARSE_LOCATION" to "loc",
+        "android.permission.READ_CONTACTS" to "contacts", "android.permission.READ_SMS" to "sms", "android.permission.READ_CALL_LOG" to "calls"
+    )
+
+    /** Какие чувствительные разрешения реально выданы приложениям. */
+    fun sensitive(c: Context, pkgs: List<String>): Map<String, Set<String>> {
+        val pm = c.packageManager
+        val out = HashMap<String, Set<String>>()
+        for (p in pkgs) {
+            try {
+                val pi = pm.getPackageInfo(p, PackageManager.GET_PERMISSIONS)
+                val rp = pi.requestedPermissions ?: continue
+                val fl = pi.requestedPermissionsFlags ?: continue
+                val s = HashSet<String>()
+                rp.forEachIndexed { i, n ->
+                    val k = SENS[n]
+                    if (k != null && (fl[i] and android.content.pm.PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0) s.add(k)
+                }
+                if (s.isNotEmpty()) out[p] = s
+            } catch (e: Exception) { }
+        }
+        return out
+    }
 }
