@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTextApi::class)
+
 package com.blackboost.app
 
 import androidx.compose.animation.core.*
@@ -15,7 +17,6 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
 import androidx.compose.ui.graphics.vector.*
 import androidx.compose.ui.text.*
-import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
@@ -42,7 +43,7 @@ val LocalLang = compositionLocalOf { "ru" }
 fun Long.sz(): String = if (this >= 1_000_000_000L) String.format(Locale.US, "%.1f GB", this / 1e9) else String.format(Locale.US, "%d MB", this / 1_000_000)
 
 fun icon(d: String): ImageVector = ImageVector.Builder(24.dp, 24.dp, 24f, 24f).addPath(
-    pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(d).toNodes(), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+    pathData = addPathNodes(d), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
     strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
 ).build()
 
@@ -195,20 +196,23 @@ fun TopBar(title: String, back: Boolean, onBack: () -> Unit) {
     }
 }
 
+val Ok = Color(0xFF3DDC84); val Warn = Color(0xFFFFC107); val Off = Color(0xFF8F8980); val Bad = Color(0xFFFF5252)
+
 @Composable
-fun NavBar(cur: Screen, go: (Screen) -> Unit) {
-    val items = listOf(
-        Triple(Screen.Home, Ic.home, t("Главная", "Home")), Triple(Screen.Clean, Ic.trash, t("Очистка", "Cleaner")),
-        Triple(Screen.Battery, Ic.battery, t("Батарея", "Battery")), Triple(Screen.Apps, Ic.grid, t("Приложения", "Apps")),
-        Triple(Screen.Settings, Ic.gear, t("Настройки", "Settings"))
-    )
-    Row(Modifier.fillMaxWidth().background(Color(0xFF070707)).navigationBarsPadding().padding(4.dp, 8.dp)) {
-        items.forEach { (s, i, l) ->
-            Column(Modifier.weight(1f).clickable { go(s) }.padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                val c = if (s == cur) Em else Mu
-                Icon(i, null, Modifier.size(22.dp), tint = c)
-                Txt(l, 10, c, FontWeight.SemiBold, align = TextAlign.Center)
-            }
+fun Dot(c: Color) { Box(Modifier.size(9.dp).clip(CircleShape).background(c)) }
+
+/** Строка функции с настоящим статусом: зелёный — активно, жёлтый — нужна настройка, серый — не используется, красный — недоступно. */
+@Composable
+fun Feat(ic: ImageVector, title: String, st: Color, stText: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable(onClick = onClick).padding(16.dp, 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Icon(ic, null, Modifier.size(26.dp), tint = Em)
+        Column(Modifier.weight(1f)) {
+            Txt(title, 15, w = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Dot(st); Txt(stText, 12, Mu) }
         }
+        Txt("›", 22, Mu)
     }
 }

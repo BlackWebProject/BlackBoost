@@ -1,70 +1,68 @@
 package com.blackboost.app
 
 import android.content.Context
-import android.os.Environment
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
 
-class Junk(val id: String, val ru: String, val en: String, val files: List<File>, val bytes: Long)
+class Del(val size: Long, val del: () -> Boolean)
+class Junk(val id: String, val ru: String, val en: String, val items: List<Del>) {
+    val bytes: Long get() = items.sumOf { it.size }
+}
 
+/**
+ * Удаляет только то, к чему у приложения есть законный доступ:
+ * 1) собственный кэш Black Boost; 2) файлы в папке, которую пользователь сам выбрал в системном выборе файлов (SAF).
+ */
 object Cleaner {
     private val tmpExt = setOf("tmp", "temp", "log", "bak", "old", "chk", "dmp")
 
-    fun ownCache(c: Context): List<File> =
+    fun ownFiles(c: Context): List<File> =
         listOfNotNull(c.cacheDir, c.externalCacheDir).flatMap { d -> d.walkBottomUp().filter { it.isFile }.toList() }
 
-    private fun sha(f: File): String = try {
-        val md = MessageDigest.getInstance("SHA-1")
-        f.inputStream().use { s ->
-            val buf = ByteArray(65536)
-            while (true) { val n = s.read(buf); if (n <= 0) break; md.update(buf, 0, n) }
-        }
-        md.digest().joinToString("") { "%02x".format(it) }
-    } catch (e: Exception) { f.path }
+    private fun fileItem(f: File) = Del(f.length()) { f.delete() }
 
-    /** Сканирует память. Если нет доступа ко всем файлам, ищет только кэш самого приложения. */
-    suspend fun scan(c: Context, all: Boolean): List<Junk> = withContext(Dispatchers.IO) {
-        val tmp = ArrayList<File>(); val sys = ArrayList<File>(); val big = ArrayList<File>()
-        if (all) {
-            val root = Environment.getExternalStorageDirectory()
-            root.walkTopDown().onEnter { !(it.parentFile == root && it.name == "Android") }.forEach { f ->
-                if (f.isFile) {
-                    val n = f.name.lowercase()
-                    val ext = n.substringAfterLast('.', "")
-                    val par = f.parentFile?.name ?: ""
-                    when {
-                        n.startsWith(".trashed-") || par == ".thumbnails" || par == "LOST.DIR" -> sys += f
-                        ext in tmpExt || n.startsWith("~") -> tmp += f
-                        // APK installers are never auto-classified as junk or deleted.
-                        ext == "apk" -> Unit
-                        f.length() >= 100 * 1024 && !n.startsWith(".") -> big += f
-                    }
-                }
-            }
+    suspend fun cleanOwn(c: Context): Long = withContext(Dispatchers.IO) {
+        var freed = 0L
+        ownFiles(c).forEach { val l = it.length(); if (it.delete()) freed += l }
+        freed
+    }
+
+    private fun walk(d: DocumentFile, depth: Int, tmp: MutableList<Del>, other: MutableList<Del>, cnt: IntArray) {
+        if (depth > 6 || cnt[0] > 20000) return
+        for (f in d.listFiles()) {
+            cnt[0]++
+            if (f.isDirectory) { walk(f, depth + 1, tmp, other, cnt); continue }
+            val n = (f.name ?: "").lowercase()
+            val ext = n.substringAfterLast('.', "")
+            val it = Del(f.length()) { f.delete() }
+            if (ext in tmpExt || n.startsWith("~")) tmp.add(it)
+            else if (ext == "apk" || n.startsWith(".trashed-")) other.add(it)
         }
-        val dup = ArrayList<File>()
-        big.groupBy { it.length() }.values.filter { it.size > 1 }.take(300).forEach { g ->
-            g.groupBy { sha(it) }.values.forEach { s -> if (s.size > 1) dup += s.sortedBy { it.lastModified() }.drop(1) }
+    }
+
+    suspend fun scan(c: Context, tree: Uri?): List<Junk> = withContext(Dispatchers.IO) {
+        val tmp = ArrayList<Del>()
+        val other = ArrayList<Del>()
+        if (tree != null) {
+            try {
+                DocumentFile.fromTreeUri(c, tree)?.let { walk(it, 0, tmp, other, IntArray(1)) }
+            } catch (e: Exception) { }
         }
-        fun j(id: String, ru: String, en: String, l: List<File>) = Junk(id, ru, en, l, l.sumOf { it.length() })
         listOf(
-            j("cache", "Кэш приложений", "App cache", ownCache(c)),
-            j("tmp", "Временные файлы", "Temp files", tmp),
-            j("left", "Остаточные файлы", "Leftover files", emptyList()),
-            j("dup", "Дубликаты файлов", "Duplicate files", dup),
-            j("sys", "Системный мусор", "System junk", sys)
+            Junk("cache", "Кэш Black Boost", "Black Boost cache", ownFiles(c).map { fileItem(it) }),
+            Junk("tmp", "Временные файлы", "Temp files", tmp),
+            Junk("other", "Остальное", "Other", other)
         )
     }
 
-    suspend fun clean(items: List<Junk>, progress: (Float) -> Unit): Long = withContext(Dispatchers.IO) {
-        val all = items.flatMap { it.files }.distinctBy { it.canonicalPath }
+    suspend fun clean(items: List<Del>, progress: (Float) -> Unit): Long = withContext(Dispatchers.IO) {
         var freed = 0L
-        all.forEachIndexed { i, f ->
-            val l = f.length()
-            if (f.isFile && !f.name.endsWith(".apk", ignoreCase = true) && f.delete()) freed += l
-            if (i % 20 == 0) progress((i + 1f) / all.size)
+        items.forEachIndexed { i, x ->
+            if (x.del()) freed += x.size
+            if (i % 10 == 0) progress((i + 1f) / items.size)
         }
         progress(1f)
         freed

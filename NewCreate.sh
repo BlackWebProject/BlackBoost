@@ -1,3 +1,756 @@
+#!/usr/bin/env bash
+# NewCreate.sh: обновляет Black Boost по новой спецификации FPS Boost (игры, профили, Game Mode, честная очистка).
+# Запуск в Codespaces из корня репозитория:  bash NewCreate.sh
+set -e
+cd "$(dirname "$0")"
+[ -f app/build.gradle.kts ] || { echo "❌ Не найден проект. Сначала выполните setup.sh"; exit 1; }
+echo "▶ Обновляю файлы проекта..."
+cat > 'app/build.gradle.kts' <<'BB_NEW_1'
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+android {
+    namespace = "com.blackboost.app"
+    compileSdk = 34
+    defaultConfig {
+        applicationId = "com.blackboost.app"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+    buildTypes { release { isMinifyEnabled = false } }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true; buildConfig = true }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+}
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("com.android.billingclient:billing:7.0.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
+}
+BB_NEW_1
+cat > 'app/src/main/AndroidManifest.xml' <<'BB_NEW_2'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Только необходимое. Нет доступа ко всем файлам, камере, микрофону, контактам, геолокации, overlay и accessibility. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.BlackBoost">
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+BB_NEW_2
+cat > 'app/src/main/java/com/blackboost/app/Prefs.kt' <<'BB_NEW_3'
+package com.blackboost.app
+
+import android.content.Context
+
+class Prof(val mode: String, val clean: Boolean, val dnd: Boolean) {
+    fun enc() = "$mode|$clean|$dnd"
+    companion object {
+        fun dec(s: String?): Prof? {
+            val p = s?.split("|") ?: return null
+            return if (p.size >= 3) Prof(p[0], p[1] == "true", p[2] == "true") else null
+        }
+    }
+}
+
+class Prefs(c: Context) {
+    private val p = c.getSharedPreferences("bb", Context.MODE_PRIVATE)
+    var lang: String
+        get() = p.getString("lang", "ru") ?: "ru"
+        set(v) = p.edit().putString("lang", v).apply()
+    var notif: Boolean
+        get() = p.getBoolean("notif", false)
+        set(v) = p.edit().putBoolean("notif", v).apply()
+    var premium: Boolean
+        get() = p.getBoolean("pr", false)
+        set(v) = p.edit().putBoolean("pr", v).apply()
+    var onboarded: Boolean
+        get() = p.getBoolean("onb", false)
+        set(v) = p.edit().putBoolean("onb", v).apply()
+    var treeUri: String?
+        get() = p.getString("tree", null)
+        set(v) = p.edit().putString("tree", v).apply()
+    var dndPrev: Int
+        get() = p.getInt("dnd", -1)
+        set(v) = p.edit().putInt("dnd", v).apply()
+    var energy: String
+        get() = p.getString("energy", "bal") ?: "bal"
+        set(v) = p.edit().putString("energy", v).apply()
+    var defProf: Prof
+        get() = Prof.dec(p.getString("def", null)) ?: Prof("perf", true, false)
+        set(v) = p.edit().putString("def", v.enc()).apply()
+    var games: Set<String>
+        get() = p.getStringSet("games", emptySet())?.toSet() ?: emptySet()
+        set(v) = p.edit().putStringSet("games", v).apply()
+    fun prof(pkg: String): Prof = Prof.dec(p.getString("p_$pkg", null)) ?: defProf
+    fun setProf(pkg: String, v: Prof) = p.edit().putString("p_$pkg", v.enc()).apply()
+}
+BB_NEW_3
+cat > 'app/src/main/java/com/blackboost/app/Sys.kt' <<'BB_NEW_4'
+package com.blackboost.app
+
+import android.Manifest
+import android.app.ActivityManager
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Environment
+import android.os.PowerManager
+import android.os.StatFs
+import android.os.storage.StorageManager
+import android.provider.Settings
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
+import java.io.File
+import kotlin.math.abs
+
+class AppInfo(val pkg: String, val label: String, val icon: ImageBitmap?, val game: Boolean)
+class Bat(val pct: Int, val charging: Boolean, val tempC: Float, val minutes: Int?)
+
+/** Только то, что обычному приложению разрешает Android: без доступа ко всем файлам и без слежки за чужими приложениями. */
+@Suppress("DEPRECATION")
+object Sys {
+    fun mem(c: Context): Pair<Long, Long> {
+        val mi = ActivityManager.MemoryInfo()
+        c.getSystemService(ActivityManager::class.java).getMemoryInfo(mi)
+        return mi.availMem to mi.totalMem
+    }
+
+    fun storage(): Pair<Long, Long> {
+        val s = StatFs(Environment.getDataDirectory().path)
+        return s.availableBytes to s.totalBytes
+    }
+
+    fun battery(c: Context): Bat {
+        val i = c.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val l = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
+        val sc = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val st = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val ch = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+        val t = (i?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
+        val bm = c.getSystemService(BatteryManager::class.java)
+        var min: Int? = null
+        if (ch) {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val ms = bm.computeChargeTimeRemaining()
+                if (ms > 0) min = (ms / 60000).toInt()
+            }
+        } else {
+            val cur = abs(bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW))
+            val cc = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+            if (cur > 0 && cc > 0) {
+                var h = cc.toDouble() / cur
+                if (h > 200) h = cc.toDouble() / (cur * 1000.0)
+                if (h in 0.05..72.0) min = (h * 60).toInt()
+            }
+        }
+        return Bat(l * 100 / sc, ch, t, min)
+    }
+
+    fun powerSave(c: Context) = c.getSystemService(PowerManager::class.java).isPowerSaveMode
+    fun hasDnd(c: Context) = c.getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted
+    fun hasNotif(c: Context) = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    fun gameModeSupported() = Build.VERSION.SDK_INT >= 31
+    fun canLaunch(c: Context, pkg: String) = c.packageManager.getLaunchIntentForPackage(pkg) != null
+
+    fun apps(c: Context): List<AppInfo> {
+        val pm = c.packageManager
+        return pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { it.activityInfo.packageName }.distinct().filter { it != c.packageName }
+            .mapNotNull { p ->
+                try {
+                    val ai = pm.getApplicationInfo(p, 0)
+                    val icon = try { pm.getApplicationIcon(p).toBitmap(96, 96).asImageBitmap() } catch (e: Exception) { null }
+                    AppInfo(p, pm.getApplicationLabel(ai).toString(), icon, ai.category == ApplicationInfo.CATEGORY_GAME)
+                } catch (e: Exception) { null }
+            }.sortedBy { it.label.lowercase() }
+    }
+
+    private fun rd(p: String): String? = try { File(p).readText().trim() } catch (e: Exception) { null }
+
+    /** Частота ядер относительно максимальной. Если ядро не отдаёт данные, вернёт null. */
+    fun cpu(): Int? {
+        var cur = 0L
+        var mx = 0L
+        for (i in 0 until Runtime.getRuntime().availableProcessors()) {
+            val b = "/sys/devices/system/cpu/cpu$i/cpufreq/"
+            val a = rd(b + "scaling_cur_freq")?.toLongOrNull() ?: continue
+            val m = rd(b + "cpuinfo_max_freq")?.toLongOrNull() ?: continue
+            cur += a
+            mx += m
+        }
+        return if (mx > 0) (cur * 100 / mx).toInt() else null
+    }
+
+    fun gpu(): Int? {
+        rd("/sys/class/kgsl/kgsl-3d0/gpubusy")?.split(" ")?.filter { it.isNotEmpty() }?.let {
+            if (it.size >= 2) {
+                val b = it[0].toLongOrNull()
+                val t = it[1].toLongOrNull()
+                if (b != null && t != null && t > 0) return (b * 100 / t).toInt()
+            }
+        }
+        rd("/sys/class/misc/mali0/device/utilization")?.toIntOrNull()?.let { return it }
+        return null
+    }
+
+    private fun tryGo(c: Context, i: Intent): Boolean = try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (e: Exception) { false }
+    private fun go(c: Context, i: Intent) { if (!tryGo(c, i)) tryGo(c, Intent(Settings.ACTION_SETTINGS)) }
+
+    fun appInfo(c: Context, p: String) = go(c, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$p")))
+    fun saver(c: Context) = go(c, Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS))
+    fun battOpt(c: Context) = go(c, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    fun dnd(c: Context) = go(c, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+    fun notifSettings(c: Context) = go(c, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, c.packageName))
+    fun manageStorage(c: Context) { if (!tryGo(c, Intent(StorageManager.ACTION_MANAGE_STORAGE))) go(c, Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) }
+
+    /** Системный Game Mode / Game Dashboard (Android 12+) или фирменный игровой режим производителя, если он есть. */
+    fun gameSettings(c: Context): Boolean {
+        val list = listOf(
+            Intent("android.settings.GAME_DASHBOARD_SETTINGS"),
+            Intent().setClassName("com.miui.securitycenter", "com.miui.gamebooster.ui.GameBoosterRealMainActivity"),
+            c.packageManager.getLaunchIntentForPackage("com.samsung.android.game.gamehome")
+        )
+        for (i in list) if (i != null && tryGo(c, i)) return true
+        return false
+    }
+}
+BB_NEW_4
+cat > 'app/src/main/java/com/blackboost/app/Cleaner.kt' <<'BB_NEW_5'
+package com.blackboost.app
+
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+
+class Del(val size: Long, val del: () -> Boolean)
+class Junk(val id: String, val ru: String, val en: String, val items: List<Del>) {
+    val bytes: Long get() = items.sumOf { it.size }
+}
+
+/**
+ * Удаляет только то, к чему у приложения есть законный доступ:
+ * 1) собственный кэш Black Boost; 2) файлы в папке, которую пользователь сам выбрал в системном выборе файлов (SAF).
+ */
+object Cleaner {
+    private val tmpExt = setOf("tmp", "temp", "log", "bak", "old", "chk", "dmp")
+
+    fun ownFiles(c: Context): List<File> =
+        listOfNotNull(c.cacheDir, c.externalCacheDir).flatMap { d -> d.walkBottomUp().filter { it.isFile }.toList() }
+
+    private fun fileItem(f: File) = Del(f.length()) { f.delete() }
+
+    suspend fun cleanOwn(c: Context): Long = withContext(Dispatchers.IO) {
+        var freed = 0L
+        ownFiles(c).forEach { val l = it.length(); if (it.delete()) freed += l }
+        freed
+    }
+
+    private fun walk(d: DocumentFile, depth: Int, tmp: MutableList<Del>, other: MutableList<Del>, cnt: IntArray) {
+        if (depth > 6 || cnt[0] > 20000) return
+        for (f in d.listFiles()) {
+            cnt[0]++
+            if (f.isDirectory) { walk(f, depth + 1, tmp, other, cnt); continue }
+            val n = (f.name ?: "").lowercase()
+            val ext = n.substringAfterLast('.', "")
+            val it = Del(f.length()) { f.delete() }
+            if (ext in tmpExt || n.startsWith("~")) tmp.add(it)
+            else if (ext == "apk" || n.startsWith(".trashed-")) other.add(it)
+        }
+    }
+
+    suspend fun scan(c: Context, tree: Uri?): List<Junk> = withContext(Dispatchers.IO) {
+        val tmp = ArrayList<Del>()
+        val other = ArrayList<Del>()
+        if (tree != null) {
+            try {
+                DocumentFile.fromTreeUri(c, tree)?.let { walk(it, 0, tmp, other, IntArray(1)) }
+            } catch (e: Exception) { }
+        }
+        listOf(
+            Junk("cache", "Кэш Black Boost", "Black Boost cache", ownFiles(c).map { fileItem(it) }),
+            Junk("tmp", "Временные файлы", "Temp files", tmp),
+            Junk("other", "Остальное", "Other", other)
+        )
+    }
+
+    suspend fun clean(items: List<Del>, progress: (Float) -> Unit): Long = withContext(Dispatchers.IO) {
+        var freed = 0L
+        items.forEachIndexed { i, x ->
+            if (x.del()) freed += x.size
+            if (i % 10 == 0) progress((i + 1f) / items.size)
+        }
+        progress(1f)
+        freed
+    }
+}
+BB_NEW_5
+cat > 'app/src/main/java/com/blackboost/app/Vm.kt' <<'BB_NEW_6'
+package com.blackboost.app
+
+import android.app.Activity
+import android.app.Application
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.runtime.*
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+enum class Screen { Splash, Onboard, Home, FpsBoost, GameMode, Clean, Cache, Energy, Picker, Profile, Flow, Settings }
+class Session(val pkg: String, val label: String, val start: Long, val ramStart: Long, val tempStart: Float, val mode: String)
+class Summary(val label: String, val secs: Long, val ramStart: Long, val ramEnd: Long, val tempStart: Float, val tempEnd: Float, val mode: String)
+class Explain(val title: String, val text: String, val action: () -> Unit)
+
+class Vm(app: Application) : AndroidViewModel(app) {
+    private val c: Context get() = getApplication()
+    val prefs = Prefs(app)
+
+    var screen by mutableStateOf(Screen.Splash)
+    private val stack = ArrayList<Screen>()
+    fun go(s: Screen, tab: Boolean = false) { if (tab) stack.clear() else stack.add(screen); screen = s }
+    fun back() {
+        if (stack.isNotEmpty()) screen = stack.removeAt(stack.size - 1)
+        else if (screen != Screen.Home) screen = Screen.Home
+    }
+
+    var lang by mutableStateOf(prefs.lang)
+    var notif by mutableStateOf(prefs.notif)
+    var premium by mutableStateOf(prefs.premium)
+    var energy by mutableStateOf(prefs.energy)
+    var defProf by mutableStateOf(prefs.defProf)
+    var games by mutableStateOf(prefs.games)
+    var profVer by mutableIntStateOf(0)
+    var treeUri by mutableStateOf(prefs.treeUri)
+    var paywall by mutableStateOf(false)
+    var toast by mutableStateOf<String?>(null)
+    var explain by mutableStateOf<Explain?>(null)
+    var summary by mutableStateOf<Summary?>(null)
+    fun tt(ru: String, en: String) = if (lang == "en") en else ru
+
+    var ramFree by mutableLongStateOf(0L)
+    var ramTotal by mutableLongStateOf(1L)
+    var stFree by mutableLongStateOf(0L)
+    var stTotal by mutableLongStateOf(1L)
+    var bat by mutableStateOf(Sys.battery(app))
+    var saver by mutableStateOf(false)
+    var dndOk by mutableStateOf(false)
+    var notifOk by mutableStateOf(false)
+    var ownBytes by mutableLongStateOf(0L)
+    var apps by mutableStateOf<List<AppInfo>>(emptyList())
+    var target by mutableStateOf<String?>(null)
+    var mon by mutableStateOf<List<Int?>>(listOf(null, null, null, null))
+
+    var junk by mutableStateOf<List<Junk>?>(null)
+    var sel by mutableStateOf(setOf<String>())
+    var phase by mutableStateOf("idle") // idle, scanning, found, cleaning, done
+    var progress by mutableFloatStateOf(0f)
+    var freed by mutableLongStateOf(0L)
+
+    var flowStep by mutableIntStateOf(0)
+    var flowReady by mutableStateOf(false)
+    var flowFreed by mutableLongStateOf(0L)
+    var flowError by mutableStateOf<String?>(null)
+    private var session: Session? = null
+
+    val billing = Billing(app) { grantPremium() }
+
+    init { Notify.schedule(app, notif && energy != "save"); refresh() }
+
+    fun grantPremium() { premium = true; prefs.premium = true }
+    fun changeLang(l: String) { lang = l; prefs.lang = l }
+    fun changeNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on && energy != "save"); refresh() }
+    fun changeEnergy(e: String) { energy = e; prefs.energy = e; Notify.schedule(c, notif && e != "save") }
+    fun finishOnboard() { prefs.onboarded = true }
+    val onboarded: Boolean get() = prefs.onboarded
+
+    fun refresh() {
+        Sys.mem(c).let { ramFree = it.first; ramTotal = it.second }
+        Sys.storage().let { stFree = it.first; stTotal = it.second }
+        bat = Sys.battery(c); saver = Sys.powerSave(c); dndOk = Sys.hasDnd(c); notifOk = Sys.hasNotif(c)
+    }
+
+    fun loadApps() { viewModelScope.launch { apps = withContext(Dispatchers.IO) { Sys.apps(c) } } }
+    fun refreshOwn() { viewModelScope.launch { ownBytes = withContext(Dispatchers.IO) { Cleaner.ownFiles(c).sumOf { it.length() } } } }
+    fun appOf(pkg: String?) = apps.firstOrNull { it.pkg == pkg }
+
+    // ---- игры и профили ----
+    fun prof(pkg: String): Prof { profVer; return prefs.prof(pkg) }
+    fun saveProf(pkg: String, p: Prof) { prefs.setProf(pkg, p); profVer++ }
+    fun saveDef(p: Prof) { prefs.defProf = p; defProf = p }
+    fun addGame(pkg: String) { prefs.setProf(pkg, prefs.defProf); games = games + pkg; prefs.games = games; profVer++ }
+    fun removeGame(pkg: String) { games = games - pkg; prefs.games = games }
+
+    fun askDnd() {
+        explain = Explain(
+            tt("Доступ «Не беспокоить»", "Do Not Disturb access"),
+            tt("Нужен, чтобы на время игры скрывать уведомления и вернуть прежний режим после игры. Ничего другого приложение не получит.",
+                "Needed to silence notifications during a game and restore your previous mode afterwards. Nothing else is accessed.")
+        ) { Sys.dnd(c) }
+    }
+
+    // ---- очистка ----
+    fun setTree(u: Uri?) {
+        if (u != null) try { c.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { }
+        treeUri = u?.toString(); prefs.treeUri = treeUri; junk = null; phase = "idle"
+    }
+
+    fun scan() {
+        if (phase == "scanning" || phase == "cleaning") return
+        phase = "scanning"
+        viewModelScope.launch {
+            val r = Cleaner.scan(c, treeUri?.let { Uri.parse(it) })
+            junk = r; sel = r.filter { it.bytes > 0 }.map { it.id }.toSet(); phase = "found"
+            ownBytes = r.firstOrNull { it.id == "cache" }?.bytes ?: 0L
+        }
+    }
+
+    fun toggle(id: String) { sel = if (id in sel) sel - id else sel + id }
+
+    fun cleanNow() {
+        val items = junk?.filter { it.id in sel }?.flatMap { it.items } ?: return
+        phase = "cleaning"; progress = 0f
+        viewModelScope.launch {
+            freed = Cleaner.clean(items) { progress = it }
+            phase = "done"; junk = null; refresh(); refreshOwn()
+        }
+    }
+
+    fun cleanOwnNow() {
+        viewModelScope.launch {
+            val f = Cleaner.cleanOwn(c); refreshOwn(); refresh()
+            toast = if (f > 0) tt("Освобождено: ${f.sz()}", "Freed: ${f.sz()}") else tt("Очищать было нечего", "Nothing to clean")
+        }
+    }
+
+    // ---- подготовка и запуск игры ----
+    fun runFlow() {
+        val pkg = target ?: return
+        flowStep = 0; flowReady = false; flowFreed = 0; flowError = null
+        viewModelScope.launch {
+            delay(350)
+            if (!Sys.canLaunch(c, pkg)) { flowError = tt("Игра не найдена на этом устройстве", "Game not found on this device"); return@launch }
+            flowStep = 1; delay(350)
+            flowStep = 2; delay(350)
+            refresh(); flowStep = 3; delay(350)
+            if (prof(pkg).clean) flowFreed = Cleaner.cleanOwn(c)
+            flowStep = 4; flowReady = true
+        }
+    }
+
+    fun launchGame(a: Activity) {
+        val pkg = target ?: return
+        val p = prof(pkg)
+        if (premium && p.dnd) dndOn()
+        val label = appOf(pkg)?.label ?: pkg
+        session = Session(pkg, label, System.currentTimeMillis(), Sys.mem(c).first, bat.tempC, p.mode)
+        val i = c.packageManager.getLaunchIntentForPackage(pkg)
+        if (i == null) { session = null; restoreDnd(); toast = tt("Не удалось запустить игру", "Could not launch the game"); return }
+        a.startActivity(i)
+    }
+
+    private fun dndOn() {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        if (nm.isNotificationPolicyAccessGranted) {
+            prefs.dndPrev = nm.currentInterruptionFilter
+            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS)
+        }
+    }
+
+    private fun restoreDnd() {
+        val p = prefs.dndPrev
+        if (p >= 0) {
+            val nm = c.getSystemService(NotificationManager::class.java)
+            if (nm.isNotificationPolicyAccessGranted) nm.setInterruptionFilter(p)
+            prefs.dndPrev = -1
+        }
+    }
+
+    /** Возврат в приложение после игры: восстанавливаем режим и показываем только реально измеренное. */
+    fun onResume() {
+        refresh()
+        val s = session
+        if (s != null) {
+            session = null; restoreDnd()
+            val secs = (System.currentTimeMillis() - s.start) / 1000
+            if (secs >= 5) summary = Summary(s.label, secs, s.ramStart, Sys.mem(c).first, s.tempStart, bat.tempC, s.mode)
+        } else if (prefs.dndPrev >= 0) restoreDnd()
+    }
+
+    fun pollMon() {
+        refresh()
+        mon = listOf(Sys.cpu(), Sys.gpu(), bat.tempC.toInt(), ((ramTotal - ramFree) * 100 / ramTotal).toInt())
+    }
+
+    fun openGameSettings(): Boolean = Sys.gameSettings(c)
+}
+BB_NEW_6
+cat > 'app/src/main/java/com/blackboost/app/UI.kt' <<'BB_NEW_7'
+@file:OptIn(ExperimentalTextApi::class)
+
+package com.blackboost.app
+
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.geometry.*
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.*
+import androidx.compose.ui.graphics.vector.*
+import androidx.compose.ui.text.*
+import androidx.compose.ui.text.font.*
+import androidx.compose.ui.text.style.*
+import androidx.compose.ui.unit.*
+import java.util.Locale
+
+val Bg = Color(0xFF050505); val Sf = Color(0xFF0E0E0E); val Ln = Color(0xFF242120)
+val Tx = Color(0xFFF4EFE8); val Mu = Color(0xFF8F8980); val Ink = Color(0xFF150500)
+val Em = Color(0xFFFF5A1F); val Am = Color(0xFFFFB347); val Rd = Color(0xFFC1121F)
+val Hot = Brush.linearGradient(listOf(Am, Em, Rd))
+
+val Disp = FontFamily(
+    Font(R.font.unbounded, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
+    Font(R.font.unbounded, FontWeight.Black, variationSettings = FontVariation.Settings(FontVariation.weight(900)))
+)
+val Body = FontFamily(
+    Font(R.font.manrope, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500))),
+    Font(R.font.manrope, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
+    Font(R.font.manrope, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700)))
+)
+
+val LocalLang = compositionLocalOf { "ru" }
+@Composable fun t(ru: String, en: String) = if (LocalLang.current == "en") en else ru
+
+fun Long.sz(): String = if (this >= 1_000_000_000L) String.format(Locale.US, "%.1f GB", this / 1e9) else String.format(Locale.US, "%d MB", this / 1_000_000)
+
+fun icon(d: String): ImageVector = ImageVector.Builder(24.dp, 24.dp, 24f, 24f).addPath(
+    pathData = addPathNodes(d), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+    strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+).build()
+
+object Ic {
+    val home = icon("M3 11L12 4l9 7v9H3z")
+    val trash = icon("M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13")
+    val battery = icon("M8 5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM10 2h4")
+    val grid = icon("M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z")
+    val gear = icon("M12 9a3 3 0 1 0 0 6 3 3 0 1 0 0-6zM12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2")
+    val back = icon("M15 5l-7 7 7 7")
+    val db = icon("M4 6a8 3 0 1 0 16 0 8 3 0 1 0-16 0M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6")
+    val bell = icon("M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4")
+    val globe = icon("M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18")
+    val bolt = icon("M13 2L4 14h6l-1 8 9-12h-6z")
+    val clock = icon("M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 7v5l3 2")
+    val close = icon("M6 6l12 12M18 6L6 18")
+    val play = icon("M5 3l14 9-14 9z")
+    val chart = icon("M3 17l5-6 4 4 6-8M3 21h18")
+}
+
+@Composable
+fun Txt(
+    s: String, size: Int = 15, color: Color = Tx, w: FontWeight = FontWeight.Medium, disp: Boolean = false,
+    modifier: Modifier = Modifier, align: TextAlign? = null, brush: Brush? = null, deco: TextDecoration? = null
+) {
+    val fam = if (disp) Disp else Body
+    if (brush != null) BasicText(s, modifier, TextStyle(brush = brush, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align ?: TextAlign.Unspecified, textDecoration = deco))
+    else Text(s, modifier, color = color, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align, textDecoration = deco)
+}
+
+fun Modifier.card(r: Int = 18): Modifier = this.background(Sf, RoundedCornerShape(r.dp)).border(1.dp, Ln, RoundedCornerShape(r.dp))
+
+@Composable
+fun HotBtn(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(16.dp)).background(Hot, alpha = if (enabled) 1f else 0.4f)
+            .clickable(enabled = enabled, onClick = onClick), Alignment.Center
+    ) { Txt(text, 15, Ink, FontWeight.Bold) }
+}
+
+@Composable
+fun Item(ic: ImageVector?, title: String, sub: String? = null, trail: (@Composable () -> Unit)? = null, onClick: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().card(16).then(if (onClick != null) Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick) else Modifier).padding(14.dp, 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        if (ic != null) Icon(ic, null, Modifier.size(24.dp), tint = Em)
+        Column(Modifier.weight(1f)) { Txt(title, 15, w = FontWeight.SemiBold); if (sub != null) Txt(sub, 12, Mu) }
+        trail?.invoke()
+    }
+}
+
+@Composable
+fun Tog(on: Boolean, onChange: (Boolean) -> Unit) {
+    val x by animateDpAsState(if (on) 22.dp else 3.dp, label = "tog")
+    Box(Modifier.width(46.dp).height(27.dp).clip(RoundedCornerShape(14.dp)).background(if (on) Em else Color(0xFF2A2725)).clickable { onChange(!on) }) {
+        Box(Modifier.offset(x, 3.dp).size(21.dp).clip(CircleShape).background(Tx))
+    }
+}
+
+@Composable
+fun Tabs(l: List<String>, s: Int, on: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        l.forEachIndexed { i, x ->
+            Box(
+                Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(20.dp))
+                    .then(if (i == s) Modifier.background(Hot) else Modifier.border(1.dp, Ln, RoundedCornerShape(20.dp)))
+                    .clickable { on(i) }, Alignment.Center
+            ) { Txt(x, 12, if (i == s) Ink else Mu, FontWeight.SemiBold) }
+        }
+    }
+}
+
+@Composable
+fun Bar(p: Float) {
+    Box(Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF1C1917))) {
+        Box(Modifier.fillMaxWidth(p.coerceIn(0f, 1f)).fillMaxHeight().background(Hot))
+    }
+}
+
+@Composable
+fun Ring(p: Float, size: Dp, anim: Boolean = true, content: @Composable BoxScope.() -> Unit) {
+    val a by animateFloatAsState(p.coerceIn(0f, 1f), tween(600), label = "ring")
+    val v = if (anim) a else p.coerceIn(0f, 1f)
+    Box(Modifier.size(size), Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val s = this.size.width * 0.06f
+            val tl = Offset(s, s)
+            val sz = Size(this.size.width - 2 * s, this.size.height - 2 * s)
+            drawArc(Color(0xFF1A1816), 0f, 360f, false, tl, sz, style = Stroke(s))
+            rotate(-90f) {
+                drawArc(Em.copy(alpha = 0.22f), 0f, 360f * v, false, tl, sz, style = Stroke(s * 2f, cap = StrokeCap.Round))
+                drawArc(Brush.sweepGradient(listOf(Am, Em, Rd)), 0f, 360f * v, false, tl, sz, style = Stroke(s, cap = StrokeCap.Round))
+            }
+        }
+        content()
+    }
+}
+
+@Composable
+fun Donut(parts: List<Pair<Float, Color>>, size: Dp, content: @Composable BoxScope.() -> Unit) {
+    Box(Modifier.size(size), Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val s = this.size.width * 0.12f
+            val tl = Offset(s / 2, s / 2)
+            val sz = Size(this.size.width - s, this.size.height - s)
+            drawArc(Color(0xFF1C1917), 0f, 360f, false, tl, sz, style = Stroke(s))
+            var a = -90f
+            parts.forEach { (f, c) ->
+                val sw = f * 360f
+                if (sw > 1f) drawArc(c, a, sw - 1.5f, false, tl, sz, style = Stroke(s))
+                a += sw
+            }
+        }
+        content()
+    }
+}
+
+/** Ровная галочка: рисуется вертикально, без поворотов. */
+@Composable
+fun CheckMark(size: Dp, color: Color = Tx) {
+    val p = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { p.animateTo(1f, tween(500)) }
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val path = Path().apply { moveTo(w * 0.2f, w * 0.52f); lineTo(w * 0.43f, w * 0.74f); lineTo(w * 0.8f, w * 0.3f) }
+        val seg = Path()
+        val pm = PathMeasure()
+        pm.setPath(path, false)
+        pm.getSegment(0f, pm.length * p.value, seg, true)
+        drawPath(seg, color, style = Stroke(w * 0.1f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+}
+
+@Composable
+fun MiniCheck(on: Boolean) {
+    Box(
+        Modifier.size(22.dp).clip(CircleShape).then(if (on) Modifier.background(Hot) else Modifier.border(2.dp, Color(0xFF4A4540), CircleShape)),
+        Alignment.Center
+    ) { if (on) CheckMark(14.dp, Ink) }
+}
+
+@Composable
+fun TopBar(title: String, back: Boolean, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(20.dp, 16.dp, 20.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (back) Box(Modifier.size(40.dp).clip(CircleShape).background(Sf).border(1.dp, Ln, CircleShape).clickable(onClick = onBack), Alignment.Center) { Icon(Ic.back, null, Modifier.size(20.dp), tint = Tx) }
+        else Spacer(Modifier.size(40.dp))
+        Txt(title, 19, disp = true, w = FontWeight.Bold, modifier = Modifier.weight(1f), align = TextAlign.Center)
+        Spacer(Modifier.size(40.dp))
+    }
+}
+
+val Ok = Color(0xFF3DDC84); val Warn = Color(0xFFFFC107); val Off = Color(0xFF8F8980); val Bad = Color(0xFFFF5252)
+
+@Composable
+fun Dot(c: Color) { Box(Modifier.size(9.dp).clip(CircleShape).background(c)) }
+
+/** Строка функции с настоящим статусом: зелёный — активно, жёлтый — нужна настройка, серый — не используется, красный — недоступно. */
+@Composable
+fun Feat(ic: ImageVector, title: String, st: Color, stText: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable(onClick = onClick).padding(16.dp, 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Icon(ic, null, Modifier.size(26.dp), tint = Em)
+        Column(Modifier.weight(1f)) {
+            Txt(title, 15, w = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Dot(st); Txt(stText, 12, Mu) }
+        }
+        Txt("›", 22, Mu)
+    }
+}
+BB_NEW_7
+cat > 'app/src/main/java/com/blackboost/app/Screens.kt' <<'BB_NEW_8'
 @file:Suppress("DEPRECATION")
 
 package com.blackboost.app
@@ -552,3 +1305,9 @@ fun Paywall(vm: Vm, act: Activity) {
         }
     }
 }
+BB_NEW_8
+echo "▶ Коммит..."
+git add -A
+GN="$(git config user.name || echo BlackBoost)"; GE="$(git config user.email || echo bb@example.com)"
+git -c user.name="$GN" -c user.email="$GE" commit -q -m "FPS Boost: games, profiles, Game Mode, honest cleaner" || echo "(нечего коммитить)"
+if git remote | grep -q .; then git push -u origin HEAD && echo "✅ Готово. Открой Actions → Build APK → Artifacts"; else echo "⚠ Нет remote: git remote add origin <URL> && git push -u origin HEAD"; fi
