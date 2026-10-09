@@ -42,7 +42,7 @@ val LocalLang = compositionLocalOf { "ru" }
 
 fun Long.sz(): String = if (this >= 1_000_000_000L) String.format(Locale.US, "%.1f GB", this / 1e9) else String.format(Locale.US, "%d MB", this / 1_000_000)
 
-fun icon(d: String): ImageVector = ImageVector.Builder(24.dp, 24.dp, 24f, 24f).addPath(
+fun icon(d: String): ImageVector = ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f).addPath(
     pathData = addPathNodes(d), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
     strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
 ).build()
