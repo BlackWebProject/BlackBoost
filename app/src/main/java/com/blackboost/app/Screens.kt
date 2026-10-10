@@ -196,6 +196,18 @@ fun SettingsS(vm: Vm) {
 
 
 @Composable
+fun tips(vm: Vm): List<String> {
+    val l = ArrayList<String>()
+    if (vm.bat.tempC >= 42f) l.add(t("Телефон нагрет: закройте тяжёлые приложения, снимите чехол, не заряжайте во время игры.", "Phone is hot: close heavy apps, remove the case, avoid charging while gaming."))
+    if (vm.ramFree * 100 / vm.ramTotal < 15) l.add(t("Мало свободной ОЗУ: закройте приложения, которыми не пользуетесь.", "Low free RAM: close apps you are not using."))
+    if (vm.stFree * 100 / vm.stTotal < 15) l.add(t("Мало места: выполните глубокое сканирование на вкладке «Очистка».", "Low storage: run a deep scan on the Cleaner tab."))
+    if (!vm.saver && vm.bat.pct < 30) l.add(t("Заряд ниже 30%: включите энергосбережение Android.", "Battery below 30%: turn on Android power saving."))
+    l.add(t("Уменьшите яркость и включите автояркость.", "Lower the brightness and enable auto-brightness."))
+    l.add(t("Если важна экономия, выберите частоту экрана 60 Гц вместо 120 Гц.", "If saving matters, choose a 60 Hz refresh rate instead of 120 Hz."))
+    return l
+}
+
+@Composable
 fun HomeS(vm: Vm) {
     LaunchedEffect(Unit) { while (true) { vm.refresh(); delay(3000) } }
     LaunchedEffect(vm.usageOk) { vm.loadApps() }

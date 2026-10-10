@@ -187,6 +187,7 @@ object Sys {
         try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         catch (e: Exception) { c.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
+    private fun tryGo(c: Context, i: Intent): Boolean = try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (e: Exception) { false }
     fun openUrl(c: Context, u: String) = tryGo(c, Intent(Intent.ACTION_VIEW, Uri.parse(u)))
     fun usageSettings(c: Context) = go(c, Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
     fun filesSettings(c: Context) { if (Build.VERSION.SDK_INT >= 30) go(c, Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${c.packageName}"))) }
