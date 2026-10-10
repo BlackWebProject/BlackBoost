@@ -12,7 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Screen { Splash, Home, Clean, Battery, Apps, Storage, Fps, Settings, Monitor, Perms, Net }
+enum class Screen { Splash, Home, Clean, Battery, Apps, Storage, Fps, Settings, Monitor, Perms, Net, Faq }
 class Explain(val title: String, val text: String, val action: () -> Unit)
 class Rep(val text: String, val ok: Boolean, val fix: (() -> Unit)? = null)
 class QuickRes(val ram: Long, val files: Long)
@@ -32,9 +32,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
 
     var lang by mutableStateOf(prefs.lang)
     var notif by mutableStateOf(prefs.notif)
-    var premium by mutableStateOf(prefs.premium)
     var gameMode by mutableStateOf(prefs.gameMode)
-    var paywall by mutableStateOf(false)
     var toast by mutableStateOf<String?>(null)
     var explain by mutableStateOf<Explain?>(null)
     var quickRes by mutableStateOf<QuickRes?>(null)
@@ -87,11 +85,8 @@ class Vm(app: Application) : AndroidViewModel(app) {
     private var dndAt = 0L
     private var usagePending = false
 
-    val billing = Billing(app) { grantPremium() }
-
     init { Notify.schedule(app, notif); refresh() }
 
-    fun grantPremium() { premium = true; prefs.premium = true }
     fun changeLang(l: String) { lang = l; prefs.lang = l }
     fun changeNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on) }
     fun changeGameMode(on: Boolean) { gameMode = on; prefs.gameMode = on }
@@ -272,8 +267,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
                 r.add(Rep(tt("Собственный кэш Black Boost очищен: ${fr.sz()}", "Black Boost cache cleared: ${fr.sz()}"), true))
             }
             if (gMode >= 2) {
-                if (!premium) r.add(Rep(tt("Game Mode+ («Не беспокоить») доступен в Premium", "Game Mode+ (Do Not Disturb) requires Premium"), false) { paywall = true })
-                else if (!gameMode) r.add(Rep(tt("Game Mode+ выключен: включите переключатель ниже", "Game Mode+ is off: turn on the switch below"), false))
+                if (!gameMode) r.add(Rep(tt("Game Mode+ выключен: включите переключатель ниже", "Game Mode+ is off: turn on the switch below"), false))
                 else if (dndOk) r.add(Rep(tt("«Не беспокоить» включится на время игры и вернётся после неё", "Do Not Disturb will turn on for the game and be restored afterwards"), true))
                 else r.add(Rep(tt("«Не беспокоить»: нужен доступ, выдайте вручную", "Do Not Disturb: access needed, grant it manually"), false) { askDnd() })
             }
@@ -294,7 +288,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
 
     fun launchGame(a: Activity) {
         val pkg = gSel ?: return
-        if (premium && gameMode && gMode >= 2 && dndOk) dndOn()
+        if (gameMode && gMode >= 2 && dndOk) dndOn()
         val i = c.packageManager.getLaunchIntentForPackage(pkg)
         if (i == null) { toast = tt("Не удалось запустить игру", "Could not launch the game"); return }
         a.startActivity(i)

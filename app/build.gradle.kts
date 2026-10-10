@@ -28,5 +28,4 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("com.android.billingclient:billing:7.0.0")
 }

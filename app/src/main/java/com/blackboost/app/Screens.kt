@@ -48,6 +48,7 @@ fun App(vm: Vm, act: Activity) {
             Screen.Monitor -> MonitorS(vm)
             Screen.Perms -> PermsS(vm)
             Screen.Net -> NetS(vm)
+            Screen.Faq -> FaqS(vm)
         }
         vm.toast?.let {
             Box(Modifier.align(Alignment.BottomCenter).padding(24.dp, 0.dp, 24.dp, 100.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF1A1512)).padding(16.dp, 12.dp)) {
@@ -77,7 +78,6 @@ fun App(vm: Vm, act: Activity) {
                 }
             }
         }
-        if (vm.paywall) Paywall(vm, act)
     }
 }
 
@@ -119,9 +119,9 @@ fun SplashS(vm: Vm) {
 
 @Composable
 fun RowScope.Tile(i: ImageVector, l: String, v: String, on: () -> Unit) =
-    Column(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).card().clickable(onClick = on).padding(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(18.dp)).card().clickable(onClick = on).padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
         Icon(i, null, Modifier.size(26.dp), tint = Em)
-        Column { Txt(l, 14, w = androidx.compose.ui.text.font.FontWeight.SemiBold); Txt(v, 17, Am, androidx.compose.ui.text.font.FontWeight.Bold, true) }
+        Column { Txt(l, 14, w = FontWeight.SemiBold, lines = 1); Txt(v, if (v.length > 8) 13 else 17, Am, FontWeight.Bold, true, lines = 1) }
     }
 
 @Composable
@@ -172,18 +172,6 @@ fun SettingsS(vm: Vm) {
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.changeNotif(ok) }
     val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Page(vm, Screen.Settings, t("Настройки", "Settings")) {
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF2A1208), Sf)))
-                .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(18.dp)).clickable { vm.paywall = true }.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Image(painterResource(R.drawable.ic_crown), null, Modifier.height(30.dp).aspectRatio(828f / 545f))
-            Column(Modifier.weight(1f)) {
-                Txt("Premium Boost", 16, disp = true, w = bold)
-                Txt(if (vm.premium) t("Активен навсегда", "Active forever") else t("Получить Premium", "Get Premium"), 12, Mu)
-            }
-            Txt(if (vm.premium) t("Активен", "Active") else "›", 15, Am, bold, true)
-        }
         Column(Modifier.fillMaxWidth().card().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Icon(Ic.globe, null, Modifier.size(24.dp), tint = Em); Txt(t("Язык", "Language"), 15, w = bold)
@@ -197,80 +185,15 @@ fun SettingsS(vm: Vm) {
                 else vm.changeNotif(on)
             }
         })
+        Item(Ic.info, t("Ответы на часто задаваемые вопросы", "Frequently asked questions"), t("Доступы, предупреждения, как всё работает", "Permissions, warnings, how it all works"),
+            trail = { Txt("›", 22, Mu) }) { vm.go(Screen.Faq) }
+        Item(Ic.send, t("Наш Telegram", "Our Telegram"), "t.me/blackboostoff",
+            trail = { Txt("›", 22, Mu) }) { Sys.openUrl(ctx, "https://t.me/blackboostoff") }
+        Spacer(Modifier.height(8.dp))
+        Txt("Сделано проектом \"BlackWeb Project\". @blackwebproject", 10, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
     }
 }
 
-@Composable
-fun Paywall(vm: Vm, act: Activity) {
-    val bold = androidx.compose.ui.text.font.FontWeight.Bold
-    Dialog(onDismissRequest = { vm.paywall = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.padding(16.dp)) {
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Brush.verticalGradient(listOf(Color(0xFF2A1208), Color(0xFF0B0B0B))))
-                    .border(1.dp, Color(0xFF5A2C1A), RoundedCornerShape(28.dp)).verticalScroll(rememberScrollState()).padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Image(painterResource(R.drawable.ic_crown), null, Modifier.height(90.dp).aspectRatio(828f / 545f))
-                Spacer(Modifier.height(10.dp))
-                Txt("Premium Boost", 26, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black, brush = Hot)
-                Spacer(Modifier.height(6.dp))
-                if (vm.premium) {
-                    Txt(t("Premium активирован", "Premium activated"), 16, w = bold)
-                    Txt(t("Все функции открыты. Спасибо!", "All features unlocked. Thank you!"), 13, Mu)
-                    Spacer(Modifier.height(20.dp))
-                    HotBtn(t("Продолжить", "Continue")) { vm.paywall = false }
-                } else {
-                    Txt(t("Получи максимум с Premium", "Get the most with Premium"), 15, w = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    Spacer(Modifier.height(16.dp))
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xAA0E0E0E)).border(1.dp, Ln, RoundedCornerShape(16.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Txt(t("Premium включает:", "Premium includes:"), 13, w = bold)
-                        listOf(
-                            "Performance Monitor" to t("Нагрузка CPU, GPU и температура в реальном времени.", "CPU and GPU load and temperature in real time."),
-                            "Game Mode+" to t("Идеальный режим для запуска игр", "The perfect mode for launching games"),
-                            null to t("Разблокировка Максимального режима FPS Boost", "Unlocks Maximum mode in FPS Boost")
-                        ).forEach { (h, d) ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(Hot))
-                                Column {
-                                    if (h != null) Txt(h, 13, w = bold)
-                                    Txt(d, 12, if (h != null) Mu else Tx)
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Txt(t("Навсегда", "Forever"), 12, Mu)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Txt(vm.billing.price ?: "49 ₽", 38, disp = true, w = androidx.compose.ui.text.font.FontWeight.Black)
-                        Txt("99 ₽", 20, Mu, deco = TextDecoration.LineThrough)
-                        Box(Modifier.rotate(-4f).clip(RoundedCornerShape(50)).background(Hot).padding(10.dp, 5.dp)) { Txt("−50%", 13, Ink, androidx.compose.ui.text.font.FontWeight.ExtraBold) }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    HotBtn(t("Оплатить", "Pay")) {
-                        if (!vm.billing.buy(act)) {
-                            if (BuildConfig.DEBUG) vm.grantPremium() else vm.toast = vm.tt("Google Play недоступен", "Google Play unavailable")
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Txt(t("Восстановить покупки", "Restore purchases"), 12, Mu, modifier = Modifier.clickable { vm.billing.restore() }.padding(8.dp))
-                }
-            }
-        }
-    }
-}
-
-
-@Composable
-fun tips(vm: Vm): List<String> {
-    val l = ArrayList<String>()
-    if (vm.bat.tempC >= 42f) l.add(t("Телефон нагрет: закройте тяжёлые приложения, снимите чехол, не заряжайте во время игры.", "Phone is hot: close heavy apps, remove the case, avoid charging while gaming."))
-    if (vm.ramFree * 100 / vm.ramTotal < 15) l.add(t("Мало свободной ОЗУ: закройте приложения, которыми не пользуетесь.", "Low free RAM: close apps you are not using."))
-    if (vm.stFree * 100 / vm.stTotal < 15) l.add(t("Мало места: выполните глубокое сканирование на вкладке «Очистка».", "Low storage: run a deep scan on the Cleaner tab."))
-    if (!vm.saver && vm.bat.pct < 30) l.add(t("Заряд ниже 30%: включите энергосбережение Android.", "Battery below 30%: turn on Android power saving."))
-    l.add(t("Уменьшите яркость и включите автояркость.", "Lower the brightness and enable auto-brightness."))
-    l.add(t("Если важна экономия, выберите частоту экрана 60 Гц вместо 120 Гц.", "If saving matters, choose a 60 Hz refresh rate instead of 120 Hz."))
-    return l
-}
 
 @Composable
 fun HomeS(vm: Vm) {
@@ -320,11 +243,11 @@ fun HomeS(vm: Vm) {
             }
             Txt("›", 22, Am)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Tile(Ic.trash, t("Очистка", "Cleaner"), junk?.sz() ?: t("Сканировать", "Scan")) { vm.go(Screen.Clean, true) }
             Tile(Ic.battery, t("Батарея", "Battery"), "${vm.bat.pct}%") { vm.go(Screen.Battery, true) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Tile(Ic.grid, t("Кэш приложений", "App cache"), if (vm.usageOk) vm.apps.sumOf { it.cache }.sz() else "—") { vm.go(Screen.Apps, true) }
             Tile(Ic.db, t("Свободно", "Free"), vm.stFree.sz()) { vm.go(Screen.Storage) }
         }
@@ -499,7 +422,7 @@ fun GameS(vm: Vm, act: Activity) {
     val ctx = LocalContext.current
     var add by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.loadApps(); vm.refresh() }
-    LaunchedEffect(vm.premium) { while (vm.premium) { vm.pollMon(); delay(1000) } }
+    LaunchedEffect(Unit) { while (true) { vm.pollMon(); delay(1000) } }
     val games = vm.apps.filter { it.game || it.pkg in vm.userGames() }
     val sel = vm.appOf(vm.gSel)
     val bold = FontWeight.Bold
@@ -521,9 +444,8 @@ fun GameS(vm: Vm, act: Activity) {
         Tabs(listOf(t("Производительность", "Performance"), t("Экономия", "Saving")), if (vm.gProf == "perf") 0 else 1) { vm.changeProf(if (it == 0) "perf" else "save") }
         Tabs(listOf(t("Базовый", "Basic"), t("Высокий", "High"), t("Максимальный", "Maximum")), vm.gMode) { i ->
             if (vm.gBusy) return@Tabs
-            if (i == 2 && !vm.premium) vm.paywall = true else vm.changeGMode(i)
+            vm.changeGMode(i)
         }
-        if (!vm.premium) Txt(t("Максимальный режим и Game Mode+ доступны в Premium", "Maximum mode and Game Mode+ require Premium"), 11, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
         Txt(t("Выберите игру", "Choose a game"), 14, w = bold)
         if (games.isEmpty()) Txt(t("Система не определила игры. Добавьте приложение вручную.", "The system found no games. Add an app manually."), 12, Mu)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -549,7 +471,7 @@ fun GameS(vm: Vm, act: Activity) {
                 Item(null, if (r.ok) t("Применено", "Applied") else t("Нужно вручную", "Manual step"), r.text, trail = { Dot(if (r.ok) Ok else Warn) }) { r.fix?.invoke() }
             }
         } else Txt(t("После проверки здесь будет честный список: что приложение применило само, а что нужно изменить вручную.", "After the check you will see an honest list: what the app applied and what you must change manually."), 12, Mu)
-        if (vm.premium) {
+        if (true) {
             val names = listOf("CPU", "GPU", t("Темп.", "Temp"), "RAM")
             val shown = vm.mon.indices.filter { vm.mon[it] != null }
             Column(Modifier.fillMaxWidth().card().padding(16.dp)) {
@@ -701,5 +623,65 @@ fun NetS(vm: Vm) {
                 14, w = bold
             )
         }
+    }
+}
+
+
+@Composable
+fun FaqS(vm: Vm) {
+    val ctx = LocalContext.current
+    var open by remember { mutableIntStateOf(-1) }
+    val qa = listOf(
+        t("Не получается дать доступ: переключатель серый", "Cannot grant access: the switch is greyed out") to t(
+            "Это защита Android для приложений, установленных из APK, а не из магазина («ограниченные настройки»). Что сделать:\n1. Откройте «О приложении» Black Boost (кнопка внизу).\n2. Нажмите три точки справа сверху и выберите «Разрешить ограниченные настройки».\n3. Вернитесь и включите нужный доступ.\nЕсли трёх точек нет, один раз нажмите на серый переключатель: пункт появится.",
+            "This is Android protection for apps installed from an APK instead of a store (“restricted settings”). What to do:\n1. Open the Black Boost app info screen (button below).\n2. Tap the three dots at the top right and choose “Allow restricted settings”.\n3. Come back and turn the access on.\nIf there are no three dots, tap the greyed-out switch once and the option will appear."),
+        t("При скачивании пишет, что приложение опасное", "The download says the app is dangerous") to t(
+            "Приложение распространяется напрямую, а не через Google Play, поэтому Chrome и Play Protect не знают разработчика и показывают предупреждение. Данные остаются на телефоне, рекламы нет. Нажмите «Подробнее» и «Всё равно установить». Если Play Protect предлагает проверку, выберите «Отправить на проверку».",
+            "The app is distributed directly, not through Google Play, so Chrome and Play Protect do not know the developer and show a warning. Data stays on your phone and there are no ads. Tap “Details” and “Install anyway”. If Play Protect offers a scan, choose “Send for scanning”."),
+        t("Зачем нужен доступ ко всем файлам?", "Why is all files access needed?") to t(
+            "Чтобы найти кэш, временные файлы, старые загрузки, большие файлы и дубликаты фото и видео и заранее показать, сколько места освободится. Удаляется только то, что вы отметили. Без доступа сканирование недоступно, остальное приложение работает.",
+            "To find cache, temp files, old downloads, large files and duplicate photos and videos and show in advance how much space will be freed. Only what you select is deleted. Without it scanning is unavailable; the rest of the app works."),
+        t("Зачем нужен доступ к статистике использования?", "Why is usage access needed?") to t(
+            "Чтобы показать размер данных и кэш приложений, давно не используемые приложения и время на экране за сутки. Данные остаются на телефоне. Без доступа показывается только размер установки.",
+            "To show app data size and cache, unused apps and screen time over 24 hours. Data stays on your phone. Without it only the install size is shown."),
+        t("Почему после оптимизации память почти не освободилась?", "Why did memory barely change after optimizing?") to t(
+            "Android сам управляет памятью и может перезапускать процессы. Приложение лишь просит систему завершить фоновые процессы и честно показывает результат. Закрывать всё подряд бессмысленно: это не ускоряет телефон.",
+            "Android manages memory itself and may restart processes. The app only asks the system to end background processes and shows the real result. Closing everything is pointless: it does not speed the phone up."),
+        t("Почему нет загрузки CPU или GPU?", "Why is there no CPU or GPU load?") to t(
+            "На многих телефонах Android закрывает эти данные от приложений. Мониторинг показывает только то, что отдаёт ваше устройство.",
+            "On many phones Android hides this data from apps. The monitor shows only what your device exposes."),
+        t("Увеличивает ли приложение FPS в играх?", "Does the app increase FPS in games?") to t(
+            "Нет. Android не разрешает обычному приложению разгонять процессор и видеочип или повышать FPS. FPS Boost освобождает память, чистит свой кэш, может включить «Не беспокоить» на время игры и подсказывает, что настроить вручную: частоту экрана и графику в игре.",
+            "No. Android does not let a regular app overclock the CPU or GPU or raise FPS. FPS Boost frees memory, clears its own cache, can turn on Do Not Disturb during a game and tells you what to set manually: refresh rate and in-game graphics."),
+        t("Как работает Game Mode+ («Не беспокоить»)?", "How does Game Mode+ (Do Not Disturb) work?") to t(
+            "Нужен доступ «Не беспокоить». Перед запуском игры из приложения режим включается, а когда вы возвращаетесь в Black Boost, прежний режим восстанавливается.",
+            "It needs Do Not Disturb access. Before the game launches from the app the mode is turned on, and when you return to Black Boost your previous mode is restored."),
+        t("Что приложение отправляет в интернет?", "What does the app send to the internet?") to t(
+            "Ничего, кроме теста сети (около 4 МБ скачивания с серверов Cloudflare). Аккаунтов нет, настройки и история очистки хранятся только на телефоне.",
+            "Nothing except the network test (about 4 MB downloaded from Cloudflare servers). There are no accounts; settings and cleaning history are stored only on your phone."),
+        t("Почему не показывается время работы батареи?", "Why is the battery time not shown?") to t(
+            "Оценка считается по току разряда, который отдают не все телефоны. Если данных нет, показывается прочерк.",
+            "The estimate uses the discharge current, which not all phones expose. If there is no data a dash is shown."),
+        t("Игры не видны в списке", "My games are not listed") to t(
+            "Игры определяет сама система. Если ваша игра не показана, нажмите «Добавить» в разделе FPS Boost и выберите её вручную.",
+            "The system itself detects games. If yours is missing, tap “Add” in FPS Boost and pick it manually."),
+        t("Как удалить данные приложения?", "How do I delete the app data?") to t(
+            "Настройки → Приложения → Black Boost → Хранилище → Очистить данные. Или просто удалите приложение.",
+            "Settings → Apps → Black Boost → Storage → Clear data. Or simply uninstall the app.")
+    )
+    Page(vm, null, t("Частые вопросы", "FAQ"), true) {
+        qa.forEachIndexed { i, (q, a) ->
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).card(16).clickable { open = if (open == i) -1 else i }.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Txt(q, 15, w = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Txt(if (open == i) "−" else "+", 22, Am)
+                }
+                if (open == i) { Spacer(Modifier.height(8.dp)); Txt(a, 13, Mu) }
+            }
+        }
+        Item(Ic.gear, t("Открыть настройки Black Boost", "Open Black Boost settings"), t("Ограниченные настройки и разрешения", "Restricted settings and permissions"),
+            trail = { Txt("›", 22, Mu) }) { Sys.appInfo(ctx, ctx.packageName) }
+        Item(Ic.send, t("Не нашли ответ? Наш Telegram", "No answer? Our Telegram"), "t.me/blackboostoff",
+            trail = { Txt("›", 22, Mu) }) { Sys.openUrl(ctx, "https://t.me/blackboostoff") }
     }
 }

@@ -62,16 +62,18 @@ object Ic {
     val close = icon("M6 6l12 12M18 6L6 18")
     val play = icon("M5 3l14 9-14 9z")
     val chart = icon("M3 17l5-6 4 4 6-8M3 21h18")
+    val info = icon("M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 11v6M12 7.5v0.01")
+    val send = icon("M21 3L3 10.5l7 2.5 2.5 7L21 3zM10 13l5-5")
 }
 
 @Composable
 fun Txt(
     s: String, size: Int = 15, color: Color = Tx, w: FontWeight = FontWeight.Medium, disp: Boolean = false,
-    modifier: Modifier = Modifier, align: TextAlign? = null, brush: Brush? = null, deco: TextDecoration? = null
+    modifier: Modifier = Modifier, align: TextAlign? = null, brush: Brush? = null, deco: TextDecoration? = null, lines: Int = Int.MAX_VALUE
 ) {
     val fam = if (disp) Disp else Body
-    if (brush != null) BasicText(s, modifier, TextStyle(brush = brush, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align ?: TextAlign.Unspecified, textDecoration = deco))
-    else Text(s, modifier, color = color, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align, textDecoration = deco)
+    if (brush != null) BasicText(s, modifier, TextStyle(brush = brush, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align ?: TextAlign.Unspecified, textDecoration = deco), maxLines = lines, overflow = TextOverflow.Ellipsis)
+    else Text(s, modifier, color = color, fontSize = size.sp, fontWeight = w, fontFamily = fam, textAlign = align, textDecoration = deco, maxLines = lines, overflow = TextOverflow.Ellipsis)
 }
 
 fun Modifier.card(r: Int = 18): Modifier = this.background(Sf, RoundedCornerShape(r.dp)).border(1.dp, Ln, RoundedCornerShape(r.dp))
