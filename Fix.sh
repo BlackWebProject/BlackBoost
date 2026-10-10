@@ -1,3 +1,587 @@
+#!/usr/bin/env bash
+# Fix.sh: решение для серого переключателя «Доступ к данным об использовании» и работа без этого доступа.
+# Запуск в Codespaces из корня репозитория:  bash Fix.sh
+set -e
+cd "$(dirname "$0")"
+[ -f app/build.gradle.kts ] || { echo "❌ Не найден проект"; exit 1; }
+echo "▶ Обновляю файлы..."
+cat > 'app/src/main/java/com/blackboost/app/Vm.kt' <<'BB_FIX_1'
+package com.blackboost.app
+
+import android.app.Activity
+import android.app.Application
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import androidx.compose.runtime.*
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+enum class Screen { Splash, Home, Clean, Battery, Apps, Storage, Fps, Settings, Monitor, Perms, Net }
+class Explain(val title: String, val text: String, val action: () -> Unit)
+class Rep(val text: String, val ok: Boolean, val fix: (() -> Unit)? = null)
+class QuickRes(val ram: Long, val files: Long)
+
+class Vm(app: Application) : AndroidViewModel(app) {
+    private val c: Context get() = getApplication()
+    val prefs = Prefs(app)
+
+    var screen by mutableStateOf(Screen.Splash)
+    private val stack = ArrayList<Screen>()
+    fun go(s: Screen, tab: Boolean = false) { if (tab) stack.clear() else stack.add(screen); screen = s }
+    fun back() {
+        if (screen == Screen.Clean && detail != null) { detail = null; return }
+        if (stack.isNotEmpty()) screen = stack.removeAt(stack.size - 1)
+        else if (screen != Screen.Home) screen = Screen.Home
+    }
+
+    var lang by mutableStateOf(prefs.lang)
+    var notif by mutableStateOf(prefs.notif)
+    var premium by mutableStateOf(prefs.premium)
+    var gameMode by mutableStateOf(prefs.gameMode)
+    var paywall by mutableStateOf(false)
+    var toast by mutableStateOf<String?>(null)
+    var explain by mutableStateOf<Explain?>(null)
+    var quickRes by mutableStateOf<QuickRes?>(null)
+    fun tt(ru: String, en: String) = if (lang == "en") en else ru
+
+    var ramFree by mutableLongStateOf(0L)
+    var ramTotal by mutableLongStateOf(1L)
+    var stFree by mutableLongStateOf(0L)
+    var stTotal by mutableLongStateOf(1L)
+    var bat by mutableStateOf(Sys.battery(app))
+    var saver by mutableStateOf(false)
+    var usageOk by mutableStateOf(false)
+    var filesOk by mutableStateOf(false)
+    var mediaOk by mutableStateOf(false)
+    var dndOk by mutableStateOf(false)
+    var hot by mutableStateOf(false)
+
+    var apps by mutableStateOf<List<AppInfo>>(emptyList())
+    var appsLoading by mutableStateOf(false)
+    var stor by mutableStateOf<Stor?>(null)
+    var fg by mutableStateOf<List<Pair<AppInfo, Long>>>(emptyList())
+    var sens by mutableStateOf<Map<String, Set<String>>>(emptyMap())
+    var permsBusy by mutableStateOf(false)
+    var netRes by mutableStateOf<NetRes?>(null)
+    var netBusy by mutableStateOf(false)
+    var mon by mutableStateOf<List<Int?>>(listOf(null, null, null, null))
+    private val cpuS = Sys.CpuSampler()
+    var histVer by mutableIntStateOf(0)
+
+    // ---- очистка ----
+    var cats by mutableStateOf<List<Cat>?>(null)
+    var selF by mutableStateOf(setOf<String>())
+    var detail by mutableStateOf<String?>(null)
+    var phase by mutableStateOf("idle") // idle, scanning, found, cleaning, done
+    var stage by mutableStateOf("")
+    var progress by mutableFloatStateOf(0f)
+    var freed by mutableLongStateOf(0L)
+    var quickBusy by mutableStateOf(false)
+    var legacyAsk: (() -> Unit)? = null
+
+    // ---- игры ----
+    var gProf by mutableStateOf(prefs.gProf)
+    var gMode by mutableIntStateOf(prefs.gMode)
+    var gSel by mutableStateOf<String?>(null)
+    var gBusy by mutableStateOf(false)
+    var gReady by mutableStateOf(false)
+    var report by mutableStateOf<List<Rep>>(emptyList())
+    var ramBefore by mutableLongStateOf(0L)
+    var ramAfter by mutableLongStateOf(0L)
+    private var dndAt = 0L
+    private var usagePending = false
+
+    val billing = Billing(app) { grantPremium() }
+
+    init { Notify.schedule(app, notif); refresh() }
+
+    fun grantPremium() { premium = true; prefs.premium = true }
+    fun changeLang(l: String) { lang = l; prefs.lang = l }
+    fun changeNotif(on: Boolean) { notif = on; prefs.notif = on; Notify.schedule(c, on) }
+    fun changeGameMode(on: Boolean) { gameMode = on; prefs.gameMode = on }
+    fun changeProf(p: String) { gProf = p; prefs.gProf = p; gReady = false }
+    fun changeGMode(m: Int) { gMode = m; prefs.gMode = m; gReady = false }
+    fun addGame(pkg: String) { prefs.games = prefs.games + pkg }
+    fun userGames(): Set<String> = prefs.games
+    fun appOf(pkg: String?) = apps.firstOrNull { it.pkg == pkg }
+
+    fun refresh() {
+        Sys.mem(c).let { ramFree = it.first; ramTotal = it.second }
+        Sys.storage().let { stFree = it.first; stTotal = it.second }
+        bat = Sys.battery(c); saver = Sys.powerSave(c); hot = bat.tempC >= 42f
+        usageOk = Sys.hasUsage(c); filesOk = Sys.hasFiles(c); mediaOk = Sys.hasMedia(c); dndOk = Sys.hasDnd(c)
+    }
+
+    fun onResume() {
+        refresh()
+        if (System.currentTimeMillis() - dndAt > 4000) restoreDnd()
+        if (usagePending) { usagePending = false; if (!usageOk) restrictedHelp() }
+    }
+
+    /** Переключатель серый: Android блокирует «ограниченные настройки» у приложений, установленных из APK. */
+    fun restrictedHelp() {
+        explain = Explain(
+            tt("Переключатель серый?", "Switch is greyed out?"),
+            tt("Android блокирует такие доступы у приложений, установленных из APK («ограниченные настройки»). Как разблокировать:\n1. Нажмите «Продолжить» — откроется экран «О приложении» Black Boost.\n2. Нажмите кнопку с тремя точками в правом верхнем углу и выберите «Разрешить ограниченные настройки».\n3. Вернитесь в «Доступ к данным об использовании» и включите переключатель.\n\nЕсли трёх точек нет, один раз нажмите на серый переключатель — пункт появится.",
+                "Android blocks such access for apps installed from an APK (“restricted settings”). To unblock:\n1. Tap Continue — the Black Boost app info screen opens.\n2. Tap the three-dot button at the top right and choose “Allow restricted settings”.\n3. Go back to “Usage access” and turn the switch on.\n\nIf there are no three dots, tap the greyed-out switch once and the option will appear.")
+        ) { Sys.appInfo(c, c.packageName) }
+    }
+
+    /** Оценка 0..100 по реальным показателям. */
+    val score: Int
+        get() {
+            val ram = minOf(35f, ramFree * 100f / ramTotal / 45f * 35f)
+            val st = minOf(35f, stFree * 100f / stTotal / 30f * 35f)
+            val j = cats?.sumOf { it.bytes }
+            val jp = if (j == null) 10f else maxOf(0f, 20f - j / 1_000_000f / 50f)
+            val bp = if (bat.tempC < 40f) 10f else if (bat.tempC < 45f) 5f else 0f
+            return (ram + st + jp + bp).toInt().coerceIn(0, 100)
+        }
+
+    // ---- запросы разрешений с объяснением ----
+    fun askFiles() {
+        explain = Explain(
+            tt("Доступ к файлам", "File access"),
+            tt("Нужен, чтобы найти кэш, старые загрузки, большие файлы и дубликаты фото и видео и заранее показать, сколько места освободится. Удаляется только то, что вы отметили.",
+                "Needed to find cache, old downloads, large files and duplicate photos/videos and show how much space will be freed. Only what you select is deleted.")
+        ) { if (Build.VERSION.SDK_INT >= 30) Sys.filesSettings(c) else legacyAsk?.invoke() }
+    }
+
+    fun askUsage() {
+        explain = Explain(
+            tt("Доступ к статистике использования", "Usage access"),
+            tt("Нужен, чтобы показать размер приложений, давно не используемые приложения и время на экране. Данные остаются на телефоне.",
+                "Needed to show app sizes, unused apps and screen time. Data stays on your phone.")
+        ) { usagePending = true; Sys.usageSettings(c) }
+    }
+
+    fun askDnd() {
+        explain = Explain(
+            tt("Доступ «Не беспокоить»", "Do Not Disturb access"),
+            tt("Нужен, чтобы на время игры скрывать уведомления и вернуть прежний режим после неё.",
+                "Needed to silence notifications during a game and restore your previous mode afterwards.")
+        ) { Sys.dnd(c) }
+    }
+
+    // ---- данные ----
+    fun loadApps() {
+        viewModelScope.launch { appsLoading = true; apps = withContext(Dispatchers.IO) { Sys.apps(c) }; appsLoading = false }
+    }
+
+    fun loadStorage() {
+        viewModelScope.launch {
+            if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
+            stor = withContext(Dispatchers.IO) { Sys.stor(c, if (usageOk) apps else emptyList()) }
+        }
+    }
+
+    fun loadFg() {
+        viewModelScope.launch {
+            if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
+            val m = withContext(Dispatchers.IO) { Sys.fgUsage(c) }
+            fg = apps.mapNotNull { a -> m[a.pkg]?.takeIf { it > 60000L }?.let { a to it } }.sortedByDescending { it.second }.take(6)
+        }
+    }
+
+    fun loadSens() {
+        viewModelScope.launch {
+            permsBusy = true
+            if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
+            sens = withContext(Dispatchers.IO) { Sys.sensitive(c, apps.map { it.pkg }) }
+            permsBusy = false
+        }
+    }
+
+    fun runNet() {
+        if (netBusy) return
+        netBusy = true; netRes = null
+        viewModelScope.launch { netRes = Net.test(c); netBusy = false }
+    }
+
+    fun pollMon() {
+        refresh()
+        mon = listOf(cpuS.read() ?: Sys.cpu(), Sys.gpu(), bat.tempC.toInt(), ((ramTotal - ramFree) * 100 / ramTotal).toInt())
+    }
+
+    // ---- очистка ----
+    fun scanClean() {
+        if (phase == "scanning" || phase == "cleaning") return
+        if (!filesOk) { askFiles(); return }
+        phase = "scanning"; stage = ""
+        viewModelScope.launch {
+            val r = Cleaner.scan(c) { stage = it }
+            cats = r; selF = r.flatMap { it.files }.filter { it.def }.map { it.path }.toSet(); phase = "found"
+        }
+    }
+
+    fun selBytes(): Long = cats?.sumOf { k -> k.files.filter { it.path in selF }.sumOf { it.size } } ?: 0L
+    fun catSelAll(k: Cat) = k.files.isNotEmpty() && k.files.all { it.path in selF }
+    fun toggleCat(k: Cat) {
+        val paths = k.files.map { it.path }
+        selF = if (catSelAll(k)) selF - paths.toSet() else selF + paths
+    }
+    fun toggleFile(f: Fi) { selF = if (f.path in selF) selF - f.path else selF + f.path }
+
+    fun cleanNow() {
+        val all = cats ?: return
+        var list = all.flatMap { it.files }.filter { it.path in selF }
+        // защита: если выбраны все копии, оригинал остаётся
+        val dupTotal = all.firstOrNull { it.id == "dup" }?.files?.groupBy { it.group }?.mapValues { it.value.size } ?: emptyMap()
+        val keep = list.filter { it.group > 0 }.groupBy { it.group }
+            .filter { (g, l) -> l.size >= (dupTotal[g] ?: Int.MAX_VALUE) }
+            .values.mapNotNull { l -> l.firstOrNull { it.orig }?.path }.toSet()
+        list = list.filter { it.path !in keep }
+        phase = "cleaning"; progress = 0f
+        viewModelScope.launch {
+            freed = Cleaner.delete(list) { progress = it }
+            prefs.addHist(freed); histVer++
+            phase = "done"; cats = null; refresh()
+        }
+    }
+
+    // ---- быстрая оптимизация ----
+    fun quick() {
+        explain = Explain(
+            tt("Быстрая оптимизация", "Quick optimization"),
+            tt("Приложение попросит Android завершить фоновые процессы (система может не выполнить запрос) и удалит безопасный мусор: собственный кэш и временные файлы. Личные файлы не затрагиваются.",
+                "The app will ask Android to end background processes (the system may ignore it) and delete safe junk: its own cache and temp files. Personal files are not touched.")
+        ) { runQuick() }
+    }
+
+    private fun runQuick() {
+        if (quickBusy) return
+        quickBusy = true
+        viewModelScope.launch {
+            val (f, _) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
+            val files = Cleaner.quick(c, filesOk)
+            prefs.addHist(files); histVer++
+            refresh(); quickBusy = false
+            quickRes = QuickRes(f, files)
+        }
+    }
+
+    // ---- Game Booster ----
+    fun prepareGame() {
+        val pkg = gSel ?: return
+        if (gBusy) return
+        gBusy = true; gReady = false; report = emptyList(); ramBefore = Sys.mem(c).first
+        viewModelScope.launch {
+            val r = ArrayList<Rep>()
+            val (f, n) = withContext(Dispatchers.IO) { Sys.boostRam(c) }
+            refresh(); ramAfter = ramFree
+            r.add(Rep(tt("Запрос на завершение фоновых процессов отправлен ($n прил.). Освобождено: ${f.sz()}. Android может перезапустить часть процессов.",
+                "Background process stop request sent ($n apps). Freed: ${f.sz()}. Android may restart some of them."), true))
+            if (gMode >= 1) {
+                val fr = Cleaner.cleanOwn(c)
+                r.add(Rep(tt("Собственный кэш Black Boost очищен: ${fr.sz()}", "Black Boost cache cleared: ${fr.sz()}"), true))
+            }
+            if (gMode >= 2) {
+                if (!premium) r.add(Rep(tt("Game Mode+ («Не беспокоить») доступен в Premium", "Game Mode+ (Do Not Disturb) requires Premium"), false) { paywall = true })
+                else if (!gameMode) r.add(Rep(tt("Game Mode+ выключен: включите переключатель ниже", "Game Mode+ is off: turn on the switch below"), false))
+                else if (dndOk) r.add(Rep(tt("«Не беспокоить» включится на время игры и вернётся после неё", "Do Not Disturb will turn on for the game and be restored afterwards"), true))
+                else r.add(Rep(tt("«Не беспокоить»: нужен доступ, выдайте вручную", "Do Not Disturb: access needed, grant it manually"), false) { askDnd() })
+            }
+            if (gProf == "perf") {
+                if (saver) r.add(Rep(tt("Энергосбережение Android включено и снижает производительность. Отключите вручную.", "Android power saving is on and reduces performance. Turn it off manually."), false) { Sys.saver(c) })
+                else r.add(Rep(tt("Энергосбережение Android выключено", "Android power saving is off"), true))
+                r.add(Rep(tt("Частота обновления: выберите максимальную (Настройки → Дисплей). Приложение не может менять её само.", "Refresh rate: choose the highest (Settings → Display). The app cannot change it."), false) { Sys.display(c) })
+                r.add(Rep(tt("Графика: в настройках самой игры выберите высокий FPS и умеренное качество теней.", "Graphics: in the game's own settings pick high FPS and moderate shadow quality."), false))
+            } else {
+                if (!saver) r.add(Rep(tt("Включите энергосбережение Android вручную, чтобы сэкономить заряд", "Turn on Android power saving manually to save battery"), false) { Sys.saver(c) })
+                else r.add(Rep(tt("Энергосбережение Android включено", "Android power saving is on"), true))
+                r.add(Rep(tt("Частота обновления: выберите 60 Гц (Настройки → Дисплей).", "Refresh rate: choose 60 Hz (Settings → Display)."), false) { Sys.display(c) })
+                r.add(Rep(tt("Графика: в настройках игры снизьте качество и ограничьте FPS.", "Graphics: in the game's settings lower quality and cap FPS."), false))
+            }
+            report = r; gBusy = false; gReady = true
+        }
+    }
+
+    fun launchGame(a: Activity) {
+        val pkg = gSel ?: return
+        if (premium && gameMode && gMode >= 2 && dndOk) dndOn()
+        val i = c.packageManager.getLaunchIntentForPackage(pkg)
+        if (i == null) { toast = tt("Не удалось запустить игру", "Could not launch the game"); return }
+        a.startActivity(i)
+    }
+
+    private fun dndOn() {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        if (nm.isNotificationPolicyAccessGranted) {
+            prefs.dndPrev = nm.currentInterruptionFilter
+            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS)
+            dndAt = System.currentTimeMillis()
+        }
+    }
+
+    private fun restoreDnd() {
+        val p = prefs.dndPrev
+        if (p >= 0) {
+            val nm = c.getSystemService(NotificationManager::class.java)
+            if (nm.isNotificationPolicyAccessGranted) nm.setInterruptionFilter(p)
+            prefs.dndPrev = -1
+        }
+    }
+}
+BB_FIX_1
+cat > 'app/src/main/java/com/blackboost/app/Sys.kt' <<'BB_FIX_2'
+package com.blackboost.app
+
+import android.Manifest
+import android.app.ActivityManager
+import android.app.AppOpsManager
+import android.app.NotificationManager
+import android.app.usage.StorageStatsManager
+import android.app.usage.UsageStatsManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Environment
+import android.os.PowerManager
+import android.os.Process
+import android.os.StatFs
+import android.os.storage.StorageManager
+import android.provider.MediaStore
+import android.provider.Settings
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
+import java.io.File
+import kotlin.math.abs
+
+class AppInfo(val pkg: String, val label: String, val icon: ImageBitmap?, val bytes: Long, val cache: Long, val lastUsed: Long, val game: Boolean)
+class Bat(val pct: Int, val charging: Boolean, val tempC: Float, val minutes: Int?)
+class Stor(val total: Long, val free: Long, val apps: Long, val media: Long, val docs: Long, val cache: Long) {
+    val other: Long get() = (total - free - apps - media - docs - cache).coerceAtLeast(0)
+}
+
+@Suppress("DEPRECATION")
+object Sys {
+    fun mem(c: Context): Pair<Long, Long> {
+        val mi = ActivityManager.MemoryInfo()
+        c.getSystemService(ActivityManager::class.java).getMemoryInfo(mi)
+        return mi.availMem to mi.totalMem
+    }
+
+    fun storage(): Pair<Long, Long> {
+        val s = StatFs(Environment.getDataDirectory().path)
+        return s.availableBytes to s.totalBytes
+    }
+
+    fun battery(c: Context): Bat {
+        val i = c.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val l = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
+        val sc = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val st = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val ch = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+        val t = (i?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
+        val bm = c.getSystemService(BatteryManager::class.java)
+        var min: Int? = null
+        if (ch) {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val ms = bm.computeChargeTimeRemaining()
+                if (ms > 0) min = (ms / 60000).toInt()
+            }
+        } else {
+            val cur = abs(bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW))
+            val cc = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+            if (cur > 0 && cc > 0) {
+                var h = cc.toDouble() / cur
+                if (h > 200) h = cc.toDouble() / (cur * 1000.0)
+                if (h in 0.05..72.0) min = (h * 60).toInt()
+            }
+        }
+        return Bat(l * 100 / sc, ch, t, min)
+    }
+
+    fun powerSave(c: Context) = c.getSystemService(PowerManager::class.java).isPowerSaveMode
+
+    fun hasUsage(c: Context): Boolean {
+        val o = c.getSystemService(AppOpsManager::class.java)
+        val m = if (Build.VERSION.SDK_INT >= 29) o.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.packageName)
+        else o.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.packageName)
+        return m == AppOpsManager.MODE_ALLOWED
+    }
+
+    fun hasFiles(c: Context) = if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+    else ContextCompat.checkSelfPermission(c, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    fun hasMedia(c: Context) = ContextCompat.checkSelfPermission(
+        c, if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+    ) == PackageManager.PERMISSION_GRANTED
+
+    fun hasDnd(c: Context) = c.getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted
+
+    fun pkgs(c: Context): List<String> = c.packageManager
+        .queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+        .map { it.activityInfo.packageName }.distinct().filter { it != c.packageName }
+
+    fun apps(c: Context): List<AppInfo> {
+        val pm = c.packageManager
+        val usage = hasUsage(c)
+        val ssm = c.getSystemService(StorageStatsManager::class.java)
+        val now = System.currentTimeMillis()
+        val used = if (usage) c.getSystemService(UsageStatsManager::class.java).queryAndAggregateUsageStats(now - 90L * 86400000, now) else emptyMap()
+        return pkgs(c).mapNotNull { p ->
+            try {
+                val ai = pm.getApplicationInfo(p, 0)
+                var b = apkSize(ai)
+                var ca = 0L
+                if (usage) {
+                    try {
+                        val s = ssm.queryStatsForPackage(StorageManager.UUID_DEFAULT, p, Process.myUserHandle())
+                        b = s.appBytes + s.dataBytes
+                        ca = s.cacheBytes
+                    } catch (e: Exception) { }
+                }
+                val icon = try { pm.getApplicationIcon(p).toBitmap(96, 96).asImageBitmap() } catch (e: Exception) { null }
+                AppInfo(p, pm.getApplicationLabel(ai).toString(), icon, b, ca, used[p]?.lastTimeUsed ?: 0L, ai.category == ApplicationInfo.CATEGORY_GAME)
+            } catch (e: Exception) { null }
+        }.sortedBy { it.label.lowercase() }
+    }
+
+    /** Просит систему завершить фоновые процессы других приложений. Возвращает (освобождено байт, число приложений). */
+    fun boostRam(c: Context): Pair<Long, Int> {
+        val am = c.getSystemService(ActivityManager::class.java)
+        val before = mem(c).first
+        val p = pkgs(c)
+        p.forEach { am.killBackgroundProcesses(it) }
+        Thread.sleep(700)
+        return (mem(c).first - before).coerceAtLeast(0) to p.size
+    }
+
+    /** Размер установки (APK) — доступен без каких-либо разрешений, в отличие от размера данных и кэша. */
+    private fun apkSize(ai: ApplicationInfo): Long {
+        var s = try { File(ai.sourceDir).length() } catch (e: Exception) { 0L }
+        ai.splitSourceDirs?.forEach { s += try { File(it).length() } catch (e: Exception) { 0L } }
+        return s
+    }
+
+    private fun rd(p: String): String? = try { File(p).readText().trim() } catch (e: Exception) { null }
+
+    /** Загрузка CPU по отношению текущей частоты ядер к максимальной (если ядро отдаёт данные). */
+    fun cpu(): Int? {
+        var cur = 0L
+        var mx = 0L
+        for (i in 0 until Runtime.getRuntime().availableProcessors()) {
+            val b = "/sys/devices/system/cpu/cpu$i/cpufreq/"
+            val a = rd(b + "scaling_cur_freq")?.toLongOrNull() ?: continue
+            val m = rd(b + "cpuinfo_max_freq")?.toLongOrNull() ?: continue
+            cur += a
+            mx += m
+        }
+        return if (mx > 0) (cur * 100 / mx).toInt() else null
+    }
+
+    /** Загрузка GPU (Adreno / Mali), если устройство разрешает чтение. */
+    fun gpu(): Int? {
+        rd("/sys/class/kgsl/kgsl-3d0/gpubusy")?.split(" ")?.filter { it.isNotEmpty() }?.let {
+            if (it.size >= 2) {
+                val b = it[0].toLongOrNull()
+                val t = it[1].toLongOrNull()
+                if (b != null && t != null && t > 0) return (b * 100 / t).toInt()
+            }
+        }
+        rd("/sys/class/misc/mali0/device/utilization")?.toIntOrNull()?.let { return it }
+        return null
+    }
+
+    fun stor(c: Context, apps: List<AppInfo>): Stor {
+        val (f, t) = storage()
+        var m = 0L
+        var d = 0L
+        try {
+            c.contentResolver.query(
+                MediaStore.Files.getContentUri("external"),
+                arrayOf(MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.MEDIA_TYPE), null, null, null
+            )?.use { cu ->
+                while (cu.moveToNext()) {
+                    val z = cu.getLong(0)
+                    when (cu.getInt(1)) { 1, 3 -> m += z; 0 -> d += z }
+                }
+            }
+        } catch (e: Exception) { }
+        return Stor(t, f, apps.sumOf { it.bytes - it.cache }, m, d, apps.sumOf { it.cache })
+    }
+
+    private fun go(c: Context, i: Intent) {
+        try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        catch (e: Exception) { c.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+    fun usageSettings(c: Context) = go(c, Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+    fun filesSettings(c: Context) { if (Build.VERSION.SDK_INT >= 30) go(c, Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${c.packageName}"))) }
+    fun appInfo(c: Context, p: String) = go(c, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$p")))
+    fun saver(c: Context) = go(c, Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS))
+    fun battOpt(c: Context) = go(c, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    fun dnd(c: Context) = go(c, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+    fun uninstall(c: Context, p: String) = go(c, Intent(Intent.ACTION_DELETE, Uri.parse("package:$p")))
+
+    fun model() = Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + Build.MODEL
+    fun androidVer() = "Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+    fun thermal(c: Context): Int? = if (Build.VERSION.SDK_INT >= 29) c.getSystemService(PowerManager::class.java).currentThermalStatus else null
+    fun display(c: Context) = go(c, Intent(Settings.ACTION_DISPLAY_SETTINGS))
+
+    /** Время на экране за 24 часа (нужен доступ к статистике использования). */
+    fun fgUsage(c: Context): Map<String, Long> {
+        if (!hasUsage(c)) return emptyMap()
+        val now = System.currentTimeMillis()
+        return c.getSystemService(UsageStatsManager::class.java).queryAndAggregateUsageStats(now - 86400000L, now).mapValues { it.value.totalTimeInForeground }
+    }
+
+    /** Загрузка CPU из /proc/stat. На многих телефонах Android 8+ файл закрыт, тогда вернёт null. */
+    class CpuSampler {
+        private var prev: LongArray? = null
+        fun read(): Int? {
+            val l = try { File("/proc/stat").bufferedReader().use { it.readLine() } } catch (e: Exception) { null } ?: return null
+            val n = l.trim().split(Regex("\\s+")).drop(1).mapNotNull { it.toLongOrNull() }
+            if (n.size < 4) return null
+            val idle = n[3] + (n.getOrNull(4) ?: 0L)
+            val tot = n.sum()
+            val p = prev
+            prev = longArrayOf(idle, tot)
+            if (p == null) return null
+            val dt = tot - p[1]
+            return if (dt > 0) (100 * (dt - (idle - p[0])) / dt).toInt().coerceIn(0, 100) else null
+        }
+    }
+
+    private val SENS = mapOf(
+        "android.permission.CAMERA" to "camera", "android.permission.RECORD_AUDIO" to "mic",
+        "android.permission.ACCESS_FINE_LOCATION" to "loc", "android.permission.ACCESS_COARSE_LOCATION" to "loc",
+        "android.permission.READ_CONTACTS" to "contacts", "android.permission.READ_SMS" to "sms", "android.permission.READ_CALL_LOG" to "calls"
+    )
+
+    /** Какие чувствительные разрешения реально выданы приложениям. */
+    fun sensitive(c: Context, pkgs: List<String>): Map<String, Set<String>> {
+        val pm = c.packageManager
+        val out = HashMap<String, Set<String>>()
+        for (p in pkgs) {
+            try {
+                val pi = pm.getPackageInfo(p, PackageManager.GET_PERMISSIONS)
+                val rp = pi.requestedPermissions ?: continue
+                val fl = pi.requestedPermissionsFlags ?: continue
+                val s = HashSet<String>()
+                rp.forEachIndexed { i, n ->
+                    val k = SENS[n]
+                    if (k != null && (fl[i] and android.content.pm.PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0) s.add(k)
+                }
+                if (s.isNotEmpty()) out[p] = s
+            } catch (e: Exception) { }
+        }
+        return out
+    }
+}
+BB_FIX_2
+cat > 'app/src/main/java/com/blackboost/app/Screens.kt' <<'BB_FIX_3'
 @file:Suppress("DEPRECATION")
 
 package com.blackboost.app
@@ -703,3 +1287,8 @@ fun NetS(vm: Vm) {
         }
     }
 }
+BB_FIX_3
+git add -A
+GN="$(git config user.name || echo BlackBoost)"; GE="$(git config user.email || echo bb@example.com)"
+git -c user.name="$GN" -c user.email="$GE" commit -q -m "Usage access help for restricted settings + install-size fallback" || echo "(нечего коммитить)"
+if git remote | grep -q .; then git push -u origin HEAD && echo "✅ Готово. Открой Actions → Build APK → Artifacts"; else echo "⚠ Нет remote"; fi

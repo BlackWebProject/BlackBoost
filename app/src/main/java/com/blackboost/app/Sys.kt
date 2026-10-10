@@ -104,7 +104,7 @@ object Sys {
         return pkgs(c).mapNotNull { p ->
             try {
                 val ai = pm.getApplicationInfo(p, 0)
-                var b = 0L
+                var b = apkSize(ai)
                 var ca = 0L
                 if (usage) {
                     try {
@@ -127,6 +127,13 @@ object Sys {
         p.forEach { am.killBackgroundProcesses(it) }
         Thread.sleep(700)
         return (mem(c).first - before).coerceAtLeast(0) to p.size
+    }
+
+    /** Размер установки (APK) — доступен без каких-либо разрешений, в отличие от размера данных и кэша. */
+    private fun apkSize(ai: ApplicationInfo): Long {
+        var s = try { File(ai.sourceDir).length() } catch (e: Exception) { 0L }
+        ai.splitSourceDirs?.forEach { s += try { File(it).length() } catch (e: Exception) { 0L } }
+        return s
     }
 
     private fun rd(p: String): String? = try { File(p).readText().trim() } catch (e: Exception) { null }

@@ -85,6 +85,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
     var ramBefore by mutableLongStateOf(0L)
     var ramAfter by mutableLongStateOf(0L)
     private var dndAt = 0L
+    private var usagePending = false
 
     val billing = Billing(app) { grantPremium() }
 
@@ -110,6 +111,16 @@ class Vm(app: Application) : AndroidViewModel(app) {
     fun onResume() {
         refresh()
         if (System.currentTimeMillis() - dndAt > 4000) restoreDnd()
+        if (usagePending) { usagePending = false; if (!usageOk) restrictedHelp() }
+    }
+
+    /** Переключатель серый: Android блокирует «ограниченные настройки» у приложений, установленных из APK. */
+    fun restrictedHelp() {
+        explain = Explain(
+            tt("Переключатель серый?", "Switch is greyed out?"),
+            tt("Android блокирует такие доступы у приложений, установленных из APK («ограниченные настройки»). Как разблокировать:\n1. Нажмите «Продолжить» — откроется экран «О приложении» Black Boost.\n2. Нажмите кнопку с тремя точками в правом верхнем углу и выберите «Разрешить ограниченные настройки».\n3. Вернитесь в «Доступ к данным об использовании» и включите переключатель.\n\nЕсли трёх точек нет, один раз нажмите на серый переключатель — пункт появится.",
+                "Android blocks such access for apps installed from an APK (“restricted settings”). To unblock:\n1. Tap Continue — the Black Boost app info screen opens.\n2. Tap the three-dot button at the top right and choose “Allow restricted settings”.\n3. Go back to “Usage access” and turn the switch on.\n\nIf there are no three dots, tap the greyed-out switch once and the option will appear.")
+        ) { Sys.appInfo(c, c.packageName) }
     }
 
     /** Оценка 0..100 по реальным показателям. */
@@ -137,7 +148,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
             tt("Доступ к статистике использования", "Usage access"),
             tt("Нужен, чтобы показать размер приложений, давно не используемые приложения и время на экране. Данные остаются на телефоне.",
                 "Needed to show app sizes, unused apps and screen time. Data stays on your phone.")
-        ) { Sys.usageSettings(c) }
+        ) { usagePending = true; Sys.usageSettings(c) }
     }
 
     fun askDnd() {
@@ -156,7 +167,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
     fun loadStorage() {
         viewModelScope.launch {
             if (apps.isEmpty()) apps = withContext(Dispatchers.IO) { Sys.apps(c) }
-            stor = withContext(Dispatchers.IO) { Sys.stor(c, apps) }
+            stor = withContext(Dispatchers.IO) { Sys.stor(c, if (usageOk) apps else emptyList()) }
         }
     }
 
