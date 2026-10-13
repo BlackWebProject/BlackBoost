@@ -3,3 +3,5 @@ build/
 .idea/
 local.properties
 *.iml
+*.jks
+keystore.b64.txt
