@@ -190,7 +190,7 @@ fun SettingsS(vm: Vm) {
         Item(Ic.send, t("Наш Telegram", "Our Telegram"), "t.me/blackboostoff",
             trail = { Txt("›", 22, Mu) }) { Sys.openUrl(ctx, "https://t.me/blackboostoff") }
         Spacer(Modifier.height(8.dp))
-        Txt("Сделано проектом \"BlackWeb Project\". @blackwebproject", 10, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
+        Txt("Сделано проектом \"NightWeb Project\". @nightwebteam", 10, Mu, modifier = Modifier.fillMaxWidth(), align = TextAlign.Center)
     }
 }
 
